@@ -1744,14 +1744,10 @@ async function handleFortressPersonaSet(args: string[]): Promise<string> {
   const result = await fortressPersonaSet(personaId);
   const blocks: string[] = [];
   if (result.error || result.status === "error") {
-    throw new CdpError(
-      result.error || "persona set failed",
-      "FORTRESS_ERROR",
-      [
-        "Ensure tilion-mcp is running: tilion-mcp --port 9223",
-        `Requested persona: ${personaId}`,
-      ],
-    );
+    throw new CdpError(result.error || "persona set failed", "FORTRESS_ERROR", [
+      "Ensure tilion-mcp is running: tilion-mcp --port 9223",
+      `Requested persona: ${personaId}`,
+    ]);
   }
   blocks.push(
     `fortress persona set: ${result.persona_id || personaId}
@@ -1775,9 +1771,7 @@ async function handleFortressReset(): Promise<string> {
     throw new CdpError(
       result.error || "fortress reset failed",
       "FORTRESS_ERROR",
-      [
-        "Ensure tilion-mcp is running: tilion-mcp --port 9223",
-      ],
+      ["Ensure tilion-mcp is running: tilion-mcp --port 9223"],
     );
   }
   blocks.push(`fortress reset: ${result.status}
@@ -1847,7 +1841,8 @@ const COMMANDS: Record<string, CommandFn> = {
   fortress: async (args) => {
     const cmd = args[0];
     if (cmd === "status") return handleFortressStatus();
-    if (cmd === "persona" && args[1] === "set") return handleFortressPersonaSet(args.slice(2));
+    if (cmd === "persona" && args[1] === "set")
+      return handleFortressPersonaSet(args.slice(2));
     if (cmd === "reset") return handleFortressReset();
     throw new CdpError("Unknown fortress command", "VALIDATION_ERROR", [
       "Run `chrome-devtools-axi fortress status` to check status",
