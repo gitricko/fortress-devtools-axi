@@ -1,12 +1,12 @@
 {
-  "name": "chrome-devtools-fortress-axi",
+  "name": "fortress-devtools-axi",
   "version": "0.1.0-fortress.1",
   "packageManager": "pnpm@11.1.1",
   "description": "AXI-compliant CLI wrapper around Fortress (stealth Chromium) — combined operations, TOON output, contextual suggestions",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gitricko/chrome-devtools-fortress-axi.git"
+    "url": "git+https://github.com/gitricko/fortress-devtools-axi.git"
   },
   "keywords": [
     "chrome",
@@ -16,10 +16,12 @@
     "agent",
     "axi",
     "toon",
-    "mcp"
+    "mcp",
+    "fortress",
+    "stealth"
   ],
   "bin": {
-    "chrome-devtools-fortress-axi": "dist/bin/chrome-devtools-axi.js"
+    "fortress-devtools-axi": "dist/bin/chrome-devtools-axi.js"
   },
   "files": [
     "dist",
