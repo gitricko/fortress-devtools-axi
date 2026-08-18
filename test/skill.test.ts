@@ -31,7 +31,7 @@ describe("createSkillMarkdown", () => {
     const markdown = createSkillMarkdown();
     const frontmatter = parseFrontmatter(markdown);
     expect(frontmatter).toEqual({
-      name: "chrome-devtools-fortress-axi",
+      name: "fortress-devtools-axi",
       description: SKILL_DESCRIPTION,
       "user-invocable": false,
       author: SKILL_AUTHOR,
@@ -48,7 +48,7 @@ describe("createSkillMarkdown", () => {
 
   it("teaches npx invocation instead of assuming a global install", () => {
     const markdown = createSkillMarkdown();
-    expect(markdown).toContain("npx -y chrome-devtools-fortress-axi");
+    expect(markdown).toContain("npx -y fortress-devtools-axi");
   });
 });
 
