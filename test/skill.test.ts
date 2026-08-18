@@ -19,9 +19,9 @@ function parseFrontmatter(markdown: string): Record<string, unknown> {
 }
 
 describe("createSkillMarkdown", () => {
-  it("matches the committed skills/chrome-devtools-axi/SKILL.md", () => {
+  it("matches the committed skills/fortress-devtools-axi/SKILL.md", () => {
     const committed = readFileSync(
-      new URL("../skills/chrome-devtools-axi/SKILL.md", import.meta.url),
+      new URL("../skills/fortress-devtools-axi/SKILL.md", import.meta.url),
       "utf8",
     );
     expect(committed).toBe(createSkillMarkdown());

@@ -38,7 +38,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 - Use pnpm for package scripts.
 - Run `pnpm run build` and `pnpm test` before pushing.
 - The pipeline will run them again, but a fast local pass saves rounds.
-- Do not hand-edit `skills/chrome-devtools-axi/SKILL.md`.
+- Do not hand-edit `skills/fortress-devtools-axi/SKILL.md`.
 - It is generated from shared CLI guidance and documented SDK built-ins by `pnpm run build:skill`, and `pnpm test` fails if it drifts.
 - Its frontmatter includes Hermes Agent metadata from `src/skill.ts`; update the generator instead of hand-editing the committed skill.
 - Keep `skills/chrome-devtools-axi/` in the npm package `files` list so releases include the installable Agent Skill.
