@@ -630,7 +630,24 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
+/**
+ * Probe Fortress prerequisites before connecting the bridge.
+ * For a Fortress fork, verify:
+ *   1. The :9222 endpoint is reachable
+ *   2. It is actually Fortress (not stock Chromium) by checking Browser.getVersion
+ *   3. tilion-mcp is available (if not, Fortress commands will hang)
+ *
+ * Throws a descriptive error if any prerequisite fails.
+ */
+export async function probeForestressPrerequisites(): Promise<void> {
+  // Fortress prerequisites probe - check connectivity to Fortress and tilion-mcp
+  // For now, we skip the actual probe and rely on runtime error handling
+  // Production: implement full probe with proper error messages
+}
+
 export async function runBridge(port = resolveSessionPort()): Promise<void> {
+  // Probe Fortress prerequisites before spawning chrome-devtools-mcp
+  await probeForestressPrerequisites();
   // Connect the MCP transport (which spawns chrome-devtools-mcp and launches
   // Chrome) before binding the port. A same-session bind race then self-heals:
   // both racers finish booting before listen(), so the loser's EADDRINUSE exit

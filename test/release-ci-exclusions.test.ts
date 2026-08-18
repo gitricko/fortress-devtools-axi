@@ -172,12 +172,14 @@ describe("release-please CI exclusions", () => {
     ".release-please-manifest.json",
     "CHANGELOG.md",
     "package.json",
+    "package-lock.json",
   ];
 
   it("derives the node release-output set for this repository", () => {
     expect(expected).toEqual([
       "CHANGELOG.md",
       "package.json",
+      "package-lock.json",
       ".release-please-manifest.json",
     ]);
   });
@@ -202,6 +204,7 @@ describe("release-please CI exclusions", () => {
       "ci.yml",
       "guard-generated-files.yml",
       "no-mistakes-required.yml",
+      "pr-validation.yml",
     ]);
 
     const failures: string[] = [];
