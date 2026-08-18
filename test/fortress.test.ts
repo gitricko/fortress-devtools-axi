@@ -1,12 +1,12 @@
 /**
- * Test: Fortress CLI 6-step gauntlet for chrome-devtools-fortress-axi
+ * Test: Fortress CLI 6-step gauntlet for fortress-devtools-axi
  *
  * This is a comprehensive acceptance test that validates:
  * 1. CLI builds and runs
  * 2. Help output includes fortress commands
  * 3. Fortress commands are properly registered
  * 4. Prerequisite probing is in place
- * 5. Integration with fortress endpoints
+ * 5. Integration with fortress endpoints (skipped in CI)
  * 6. Error handling for missing dependencies
  */
 
@@ -15,7 +15,7 @@ import { execSync, spawn } from "node:child_process";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 
-describe("chrome-devtools-fortress-axi", () => {
+describe("fortress-devtools-axi", () => {
   const projectRoot = process.cwd();
   const distBin = join(projectRoot, "dist/bin/chrome-devtools-axi.js");
 
@@ -85,10 +85,10 @@ describe("chrome-devtools-fortress-axi", () => {
     const pkg = await import(join(projectRoot, "package.json"), {
       assert: { type: "json" },
     });
-    expect(pkg.default.name).toBe("chrome-devtools-fortress-axi");
+    expect(pkg.default.name).toBe("fortress-devtools-axi");
     expect(pkg.default.version).toMatch(/fortress/);
     expect(pkg.default.repository.url).toContain("gitricko");
-    expect(pkg.default.bin).toHaveProperty("chrome-devtools-fortress-axi");
+    expect(pkg.default.bin).toHaveProperty("fortress-devtools-axi");
   });
 
   // Bonus: Verify SKILL.md exists and is updated
@@ -98,7 +98,7 @@ describe("chrome-devtools-fortress-axi", () => {
       "skills/chrome-devtools-axi/SKILL.md",
     );
     const skillContent = execSync(`cat ${skillPath}`, { encoding: "utf-8" });
-    expect(skillContent).toContain("chrome-devtools-fortress-axi");
+    expect(skillContent).toContain("fortress-devtools-axi");
     expect(skillContent).toContain("Prerequisites");
     expect(skillContent).toContain("Fortress");
     expect(skillContent).toContain("fortress status");
