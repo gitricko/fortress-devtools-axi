@@ -49,7 +49,7 @@ export type MainOptions = {
 };
 
 export const TOP_HELP = `usage: chrome-devtools-axi [command] [args] [flags]
-commands[35]:
+commands[38]:
   open <url>, snapshot, screenshot <path>, click @<uid>, fill @<uid> <text>,
   type <text>, press <key>, scroll <dir>, back, wait <ms|text>, eval <js>,
   run,
@@ -57,7 +57,8 @@ commands[35]:
   upload @<uid> <path>, pages, newpage <url>, selectpage <id>, closepage <id>,
   resize <w> <h>, emulate, console, console-get <id>, network,
   network-get [id], lighthouse, perf-start, perf-stop,
-  perf-insight <set> <name>, heap <path>, start, stop, setup hooks
+  perf-insight <set> <name>, heap <path>, start, stop, setup hooks,
+  fortress status, fortress persona set, fortress reset
 
 flags[2]:
   --help, -v/-V/--version
@@ -1703,6 +1704,93 @@ async function handleHome(_full: boolean): Promise<string> {
   return renderOutput([encode({ page }), renderHelp(help)]);
 }
 
+// --- Fortress-specific command handlers ---
+
+async function handleFortressStatus(): Promise<string> {
+  const { fortressStatus } = await import("./commands/fortress.js");
+  const result = await fortressStatus();
+  const blocks: string[] = [];
+  if (result.error) {
+    throw new CdpError(result.error, "FORTRESS_ERROR", [
+      "Ensure Fortress is running: tilion-fortress --headless=new --remote-debugging-port=9222",
+      "Ensure tilion-mcp is running: tilion-mcp --port 9223",
+    ]);
+  }
+  blocks.push(
+    `fortress status:
+  persona: ${result.persona || "(default)"}
+  fingerprint_state: ${result.fingerprint_state || "(active)"}
+  ua: ${result.ua || "(Fortress default)"}
+`,
+  );
+  blocks.push(
+    renderHelp([
+      "Run `chrome-devtools-axi fortress persona set <persona-id>` to switch personas",
+      "Run `chrome-devtools-axi fortress reset` to clear stealth state",
+    ]),
+  );
+  return renderOutput(blocks);
+}
+
+async function handleFortressPersonaSet(args: string[]): Promise<string> {
+  const { fortressPersonaSet } = await import("./commands/fortress.js");
+  const personaId = args[0];
+  if (!personaId) {
+    throw new CdpError("Missing persona ID", "VALIDATION_ERROR", [
+      "Run `chrome-devtools-axi fortress persona set <persona-id>`",
+      "Example: chrome-devtools-axi fortress persona set chrome-windows",
+    ]);
+  }
+  const result = await fortressPersonaSet(personaId);
+  const blocks: string[] = [];
+  if (result.error || result.status === "error") {
+    throw new CdpError(
+      result.error || "persona set failed",
+      "FORTRESS_ERROR",
+      [
+        "Ensure tilion-mcp is running: tilion-mcp --port 9223",
+        `Requested persona: ${personaId}`,
+      ],
+    );
+  }
+  blocks.push(
+    `fortress persona set: ${result.persona_id || personaId}
+status: ${result.status}
+`,
+  );
+  blocks.push(
+    renderHelp([
+      "Run `chrome-devtools-axi fortress status` to verify persona change",
+      "Run `chrome-devtools-axi snapshot` to confirm the page loaded with new persona",
+    ]),
+  );
+  return renderOutput(blocks);
+}
+
+async function handleFortressReset(): Promise<string> {
+  const { fortressReset } = await import("./commands/fortress.js");
+  const result = await fortressReset();
+  const blocks: string[] = [];
+  if (result.error || result.status === "error") {
+    throw new CdpError(
+      result.error || "fortress reset failed",
+      "FORTRESS_ERROR",
+      [
+        "Ensure tilion-mcp is running: tilion-mcp --port 9223",
+      ],
+    );
+  }
+  blocks.push(`fortress reset: ${result.status}
+`);
+  blocks.push(
+    renderHelp([
+      "Run `chrome-devtools-axi snapshot` to confirm reset",
+      "Run `chrome-devtools-axi fortress status` to check new fingerprint state",
+    ]),
+  );
+  return renderOutput(blocks);
+}
+
 type CommandFn = (args: string[]) => Promise<string>;
 
 function withFullFlag(
@@ -1756,6 +1844,17 @@ const COMMANDS: Record<string, CommandFn> = {
   start: async () => handleStart(),
   stop: async () => handleStop(),
   setup: withoutFullFlag(handleSetup),
+  fortress: async (args) => {
+    const cmd = args[0];
+    if (cmd === "status") return handleFortressStatus();
+    if (cmd === "persona" && args[1] === "set") return handleFortressPersonaSet(args.slice(2));
+    if (cmd === "reset") return handleFortressReset();
+    throw new CdpError("Unknown fortress command", "VALIDATION_ERROR", [
+      "Run `chrome-devtools-axi fortress status` to check status",
+      "Run `chrome-devtools-axi fortress persona set <id>` to switch persona",
+      "Run `chrome-devtools-axi fortress reset` to reset state",
+    ]);
+  },
 };
 
 export async function main(

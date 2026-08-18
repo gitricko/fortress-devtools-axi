@@ -43,6 +43,7 @@ export type ErrorCode =
   | "TIMEOUT"
   | "BROWSER_ERROR"
   | "VALIDATION_ERROR"
+  | "FORTRESS_ERROR"
   | "UNKNOWN";
 
 export class CdpError extends AxiError {
