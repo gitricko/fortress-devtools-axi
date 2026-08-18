@@ -93,10 +93,7 @@ describe("fortress-devtools-axi", () => {
 
   // Bonus: Verify SKILL.md exists and is updated
   it("Bonus: SKILL.md is updated for Fortress", () => {
-    const skillPath = join(
-      projectRoot,
-      "skills/chrome-devtools-axi/SKILL.md",
-    );
+    const skillPath = join(projectRoot, "skills/chrome-devtools-axi/SKILL.md");
     const skillContent = execSync(`cat ${skillPath}`, { encoding: "utf-8" });
     expect(skillContent).toContain("fortress-devtools-axi");
     expect(skillContent).toContain("Prerequisites");
