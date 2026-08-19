@@ -1713,7 +1713,7 @@ async function handleFortressStatus(): Promise<string> {
   if (result.error) {
     throw new CdpError(result.error, "FORTRESS_ERROR", [
       "Ensure Fortress is running: tilion-fortress --headless=new --remote-debugging-port=9222",
-      "Ensure tilion-mcp is running: tilion-mcp --port 9223",
+      "Ensure tilion-mcp bridge is running (chrome-devtools-axi-tilion-bridge)",
     ]);
   }
   blocks.push(
@@ -1745,7 +1745,7 @@ async function handleFortressPersonaSet(args: string[]): Promise<string> {
   const blocks: string[] = [];
   if (result.error || result.status === "error") {
     throw new CdpError(result.error || "persona set failed", "FORTRESS_ERROR", [
-      "Ensure tilion-mcp is running: tilion-mcp --port 9223",
+      "Ensure tilion-mcp bridge is running (chrome-devtools-axi-tilion-bridge)",
       `Requested persona: ${personaId}`,
     ]);
   }
@@ -1771,7 +1771,7 @@ async function handleFortressReset(): Promise<string> {
     throw new CdpError(
       result.error || "fortress reset failed",
       "FORTRESS_ERROR",
-      ["Ensure tilion-mcp is running: tilion-mcp --port 9223"],
+      ["Ensure tilion-mcp bridge is running (chrome-devtools-axi-tilion-bridge)"],
     );
   }
   blocks.push(`fortress reset: ${result.status}

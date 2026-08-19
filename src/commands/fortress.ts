@@ -1,98 +1,40 @@
+import { callTilionTool } from "../tilion-client.js";
+
 /**
- * Fortress-specific commands (status, persona set, reset).
- * These wrap tilion-mcp calls for stealth operations.
+ * fortress status — show current Fortress persona and fingerprint state
+ * Proxies through the tilion-mcp bridge
  */
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-const TILION_MCP_PORT = process.env.CHROME_DEVTOOLS_AXI_TMCP_PORT || "9223";
-const TILION_MCP_BASE_URL = `http://127.0.0.1:${TILION_MCP_PORT}`;
-
-export interface FortressStatusResponse {
+export async function fortressStatus(): Promise<{
   persona?: string;
   fingerprint_state?: string;
   ua?: string;
   error?: string;
-}
-
-export interface FortressPersonaSetRequest {
-  persona_id: string;
-}
-
-export interface FortressPersonaSetResponse {
-  status: string;
-  persona_id?: string;
-  error?: string;
-}
-
-export interface FortressResetResponse {
-  status: string;
-  error?: string;
-}
-
-/**
- * Call tilion-mcp HTTP endpoint with proper error handling.
- */
-async function callTilionMcp(
-  method: string,
-  path: string,
-  body?: Record<string, unknown>,
-): Promise<unknown> {
-  const url = `${TILION_MCP_BASE_URL}${path}`;
-  const options: RequestInit = {
-    method,
-    headers: { "Content-Type": "application/json" },
-  };
-
-  if (body) {
-    options.body = JSON.stringify(body);
-  }
-
+}> {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    try {
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      return await response.json();
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  } catch (error) {
-    throw new Error(
-      `tilion-mcp call failed at ${url}: ${getErrorMessage(error)}`,
-    );
-  }
-}
-
-/**
- * fortress status — show current Fortress persona and fingerprint state
- */
-export async function fortressStatus(): Promise<FortressStatusResponse> {
-  try {
-    const result = await callTilionMcp("GET", "/fortress/status");
-    return result as FortressStatusResponse;
+    const result = await callTilionTool("fortress_status", {});
+    return result as unknown as {
+      persona?: string;
+      fingerprint_state?: string;
+      ua?: string;
+    };
   } catch (error) {
     return {
-      error: `fortress status failed: ${getErrorMessage(error)}`,
+      error: `fortress status failed: ${error}`,
     };
   }
 }
 
 /**
  * fortress persona set <persona-id> — switch to a specific stealth persona
+ * Proxies through the tilion-mcp bridge
  */
 export async function fortressPersonaSet(
   personaId: string,
-): Promise<FortressPersonaSetResponse> {
+): Promise<{
+  status: string;
+  persona_id?: string;
+  error?: string;
+}> {
   if (!personaId || personaId.trim().length === 0) {
     return {
       status: "error",
@@ -101,29 +43,38 @@ export async function fortressPersonaSet(
   }
 
   try {
-    const result = await callTilionMcp("POST", "/fortress/persona/set", {
+    const result = await callTilionTool("fortress_persona_set", {
       persona_id: personaId,
     });
-    return result as FortressPersonaSetResponse;
+    return result as unknown as {
+      status: string;
+      persona_id?: string;
+    };
   } catch (error) {
     return {
       status: "error",
-      error: `fortress persona set failed: ${getErrorMessage(error)}`,
+      error: `fortress persona set failed: ${error}`,
     };
   }
 }
 
 /**
  * fortress reset — clear all Fortress stealth state (fingerprint, persona, etc)
+ * Proxies through the tilion-mcp bridge
  */
-export async function fortressReset(): Promise<FortressResetResponse> {
+export async function fortressReset(): Promise<{
+  status: string;
+  error?: string;
+}> {
   try {
-    const result = await callTilionMcp("POST", "/fortress/reset");
-    return result as FortressResetResponse;
+    const result = await callTilionTool("fortress_reset", {});
+    return result as unknown as {
+      status: string;
+    };
   } catch (error) {
     return {
       status: "error",
-      error: `fortress reset failed: ${getErrorMessage(error)}`,
+      error: `fortress reset failed: ${error}`,
     };
   }
 }

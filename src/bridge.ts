@@ -98,7 +98,7 @@ export async function isBridgeTargetReachable(
   }
 }
 
-function writePidFile(port: number): void {
+export function writePidFile(port: number): void {
   const pidFile = resolveSessionPidFile();
   mkdirSync(dirname(pidFile), { recursive: true });
   writeFileSync(pidFile, JSON.stringify({ pid: process.pid, port }));

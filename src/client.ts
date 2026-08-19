@@ -62,7 +62,7 @@ interface PidInfo {
   port: number;
 }
 
-function readPidFile(
+export function readPidFile(
   pidFile: string = resolveSessionPidFile(),
 ): PidInfo | null {
   try {
@@ -77,7 +77,7 @@ function readPidFile(
   }
 }
 
-function isProcessAlive(pid: number): boolean {
+export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -86,7 +86,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function httpGet(
+export function httpGet(
   port: number,
   path: string,
   timeoutMs = 2000,
@@ -109,7 +109,7 @@ function httpGet(
   });
 }
 
-function httpPost(
+export function httpPost(
   port: number,
   path: string,
   body: unknown,

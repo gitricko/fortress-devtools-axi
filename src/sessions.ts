@@ -120,3 +120,46 @@ export function resolveSessionPidFile(
 ): string {
   return join(resolveSessionStateDir(name), "bridge.pid");
 }
+
+/**
+ * Default port for tilion bridge - 9225 to avoid collision with chrome bridge (9224)
+ */
+export const DEFAULT_TILION_BASE_PORT = 9225;
+const TILION_SESSION_PORT_RANGE = 1000; // 9226..10225 reserved for named sessions
+
+/**
+ * Deterministic port for a tilion session name: an FNV-1a hash mapped into
+ * [DEFAULT_TILION_BASE_PORT+1, DEFAULT_TILION_BASE_PORT+TILION_SESSION_PORT_RANGE].
+ * The default session keeps DEFAULT_TILION_BASE_PORT.
+ */
+export function defaultTilionPortForSession(name: string): number {
+  if (name === DEFAULT_SESSION_NAME) return DEFAULT_TILION_BASE_PORT;
+  let hash = 2166136261;
+  for (let i = 0; i < name.length; i++) {
+    hash ^= name.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return DEFAULT_TILION_BASE_PORT + (Math.abs(hash) % TILION_SESSION_PORT_RANGE) + 1;
+}
+
+/**
+ * Resolve the tilion bridge port for a session: explicit `CHROME_DEVTOOLS_AXI_TILION_PORT`
+ * wins, otherwise the session-derived default.
+ */
+export function resolveTilionSessionPort(
+  name: string = resolveSessionName(),
+): number {
+  const explicit = process.env.CHROME_DEVTOOLS_AXI_TILION_PORT;
+  if (explicit) {
+    const parsed = Number.parseInt(explicit, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return defaultTilionPortForSession(name);
+}
+
+/** PID file path for a tilion session, under its state directory. */
+export function resolveTilionSessionPidFile(
+  name: string = resolveSessionName(),
+): string {
+  return join(resolveSessionStateDir(name), "tilion-bridge.pid");
+}
