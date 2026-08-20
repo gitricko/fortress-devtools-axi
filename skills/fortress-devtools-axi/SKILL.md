@@ -76,5 +76,3 @@ Run `npx -y fortress-devtools-axi --help` for flags and environment variables, o
 - Save large request/response bodies to files with `network-get <id> --response-file <path>` (or `--request-file`) instead of dumping them into chat, to avoid blowing up context.
 - Fortress spoofs fingerprint and UA automatically; check with `fortress status` before assuming you need `fortress persona set`.
 - Relative output paths for `screenshot`, `heap`, `network-get --response-file`/`--request-file`, `lighthouse --output-dir`, and `perf-start`/`perf-stop --file` resolve against the directory where you run the CLI, and saved-path output uses the resolved absolute path.
-
-<!-- Greptile: review trigger — Phase 2 deliverable for fortress-devtools-axi (#2) -->
