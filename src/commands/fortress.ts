@@ -11,21 +11,59 @@ export async function fortressStatus(): Promise<{
   error?: string;
 }> {
   try {
-    const result = await withTimeout(
-      callTilionTool("fortress_status", {}),
-      1000,
-      `fortress status timed out waiting for the tilion-mcp bridge on port ${process.env.CHROME_DEVTOOLS_AXI_TMCP_PORT ?? 9223}`
-    );
-    return result as unknown as {
-      persona?: string;
-      fingerprint_state?: string;
-      ua?: string;
-    };
+    const result = await fortressStatusWithDeadline();
+    return result;
   } catch (error) {
     return {
       error: `fortress status failed: ${error}`,
     };
   }
+}
+
+/**
+ * Resolve fortress status, but never let the command hang. When no tilion-mcp
+ * bridge is running (or it is slow to become ready), the underlying bridge
+ * poll keeps the process's event loop alive for up to the bridge readiness
+ * timeout. We cap our own wait at a short deadline and arm a watchdog that
+ * forces a clean, non-zero process exit once the CLI has already produced its
+ * graceful error — so `fortress status` always returns promptly instead of
+ * blocking on a pending poll timer.
+ */
+const FORTRESS_STATUS_DEADLINE_MS = 1000;
+const FORTRESS_STATUS_WATCHDOG_MS = 2500;
+
+function fortressStatusWithDeadline(): Promise<{
+  persona?: string;
+  fingerprint_state?: string;
+  ua?: string;
+}> {
+  let settled = false;
+  const watchdog = setTimeout(() => {
+    if (!settled) process.exit(1);
+  }, FORTRESS_STATUS_WATCHDOG_MS);
+  watchdog.unref();
+  return withTimeout(
+    callTilionTool("fortress_status", {}),
+    FORTRESS_STATUS_DEADLINE_MS,
+    `fortress status timed out waiting for the tilion-mcp bridge on port ${process.env.CHROME_DEVTOOLS_AXI_TMCP_PORT ?? 9223}`,
+  )
+    .then((value) => {
+      // Success: the bridge is healthy and the process can exit on its own.
+      settled = true;
+      clearTimeout(watchdog);
+      return value as unknown as {
+        persona?: string;
+        fingerprint_state?: string;
+        ua?: string;
+      };
+    })
+    .catch((err) => {
+      // Error path: the underlying bridge poll may still hold the event loop
+      // open (pending setTimeout chain), so we deliberately leave the watchdog
+      // armed. It forces a clean, non-zero exit shortly after the graceful
+      // error has been produced, instead of relying on the loop emptying.
+      throw err;
+    });
 }
 
 /**
