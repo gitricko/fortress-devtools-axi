@@ -5,9 +5,15 @@ import { Server } from "node:http";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import { resolveSessionPort, resolveSessionName } from "./sessions.js";
-import { writePidFile, removePidFile, getErrorMessage } from "./bridge.js";
-import { buildTransportArgs } from "./bridge.js";
+import { getErrorMessage, buildTransportArgs } from "./bridge.js";
 import { isProcessAlive } from "./client.js";
+import { isRequestAllowed } from "./bridge.js";
+import {
+  writeTilionPidFile,
+  removeTilionPidFile,
+  resolveTilionMcpSpec,
+  TILION_BRIDGE_PORT_IN_USE_EXIT_CODE,
+} from "./tilion-bridge-script.js";
 
 /**
  * Probe interface for tilion-mcp prerequisites.
@@ -22,26 +28,14 @@ export async function runTilionBridge(port: number = resolveSessionPort()): Prom
 
   // Build transport args for tilion-mcp
   const mcpArgs = buildTransportArgs();
-  // For tilion, we need to use the tilion-mcp package instead of chrome-devtools-mcp
-  // Since the package name is different, we adjust the args
-  const tilionMcpPath = process.env.CHROME_DEVTOOLS_AXI_TILION_MCP_PATH;
+  // Resolve the tilion-mcp spec (pinned version, env-overridable — see
+  // resolveTilionMcpSpec for the override order and rationale).
+  const tilionSpec = resolveTilionMcpSpec();
 
-  let transportSpec: { command: string; args: string[] };
-
-  if (tilionMcpPath) {
-    transportSpec = {
-      command: process.execPath,
-      args: [tilionMcpPath, ...mcpArgs],
-    };
-  } else {
-    // Auto-detect tilion-mcp globally or use npx
-    transportSpec = {
-      command: "npx",
-      args: ["-y", "tilion-mcp@latest", ...mcpArgs.slice(2)],
-    };
-  }
-
-  const transport = new StdioClientTransport(transportSpec);
+  const transport = new StdioClientTransport({
+    command: tilionSpec.command,
+    args: [...tilionSpec.args, ...mcpArgs.slice(2)],
+  });
   const client = new Client({ name: "tilion-mcp-bridge", version: "1.0.0" });
   await client.connect(transport);
 
@@ -77,6 +71,20 @@ export async function runTilionBridge(port: number = resolveSessionPort()): Prom
     }
 
     if (req.method === "POST" && req.url === "/call") {
+      // DNS-rebinding protection: the sibling chrome bridge enforces Host /
+      // Origin checks on every request. Mirror that here — without it, a
+      // malicious page could rebind its origin to the predictable local
+      // bridge port and submit arbitrary tool calls (fortress reset,
+      // persona-set, etc.) bypassing any browser-side sandbox.
+      if (!isRequestAllowed(req)) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "forbidden: bridge requests must originate from loopback",
+          }),
+        );
+        return;
+      }
       // Handle tool calls
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
@@ -104,15 +112,44 @@ export async function runTilionBridge(port: number = resolveSessionPort()): Prom
   });
 
   server.listen(port, "127.0.0.1", () => {
-    writePidFile(port);
+    // Use the tilion-specific PID file (tilion-bridge.pid), NOT the shared
+    // chrome bridge's `bridge.pid`. The two bridges have different PID
+    // records so ensureTilionBridge can find this process without
+    // clobbering the chrome bridge's PID (and vice-versa).
+    writeTilionPidFile(port, sessionName);
+    // Mark ownership so the exit handler knows it may safely remove
+    // the PID file. If `listen` later errors (EADDRINUSE), we never
+    // reach here and the loser process will not delete the winner's
+    // record. See #7 in Greptile review.
+    ownsPidFile = true;
+  });
+  // EADDRINUSE handling: another process (e.g. chrome bridge on a
+  // nearby port, or a sibling tilion bridge on the deterministic port)
+  // is already bound. Exit with a distinct code so the client can
+  // distinguish "port busy" from generic startup failure.
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      process.stderr.write(
+        `[tilion-bridge] port ${port} already in use; another bridge owns it\n`,
+      );
+      process.exit(TILION_BRIDGE_PORT_IN_USE_EXIT_CODE);
+    }
+    throw err;
   });
 
   // Shutdown handling
   let shuttingDown = false;
+  // Tracks whether THIS process successfully bound the port and wrote
+  // the PID file. Only that process is allowed to remove the PID file
+  // on exit — otherwise, if two CLI processes race to bind the same
+  // deterministic port and the loser still calls removeTilionPidFile
+  // unconditionally on exit, it would delete the WINNER's PID record,
+  // making the running bridge undiscoverable to later commands.
+  let ownsPidFile = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    removePidFile();
+    if (ownsPidFile) removeTilionPidFile(sessionName);
     server.close();
     client.close();
     transport.close();
@@ -120,7 +157,7 @@ export async function runTilionBridge(port: number = resolveSessionPort()): Prom
   };
 
   process.on("exit", () => {
-    removePidFile();
+    if (ownsPidFile) removeTilionPidFile(sessionName);
     try {
       process.kill(-process.pid, "SIGTERM");
     } catch {}
@@ -131,15 +168,53 @@ export async function runTilionBridge(port: number = resolveSessionPort()): Prom
 }
 
 function extractToolText(content: unknown): string {
-  if (!content || typeof content !== "object" || !("content" in content)) {
+  // MCP tool-call responses can come in several shapes:
+  //   1. undefined / null                       (tool returned no content)
+  //   2. string                                  (older / non-standard MCP servers)
+  //   3. array of content blocks                 (NEW: some servers return the
+  //                                              content array at the top
+  //                                              level — `{type:"text",...}[]
+  //                                              instead of `{content:[...]}`)
+  //   4. object with `content` array of blocks  (canonical MCP shape)
+  //
+  // The earlier versions only handled #1 and #4, silently returning "" or
+  // a JSON-encoded string on #2/#3. That made fortress status / persona-set
+  // / reset report wrong data on successful tool calls.
+
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+
+  // Helper to extract text from an array of content blocks (used by #3 and #4).
+  const fromBlocks = (blocks: unknown[]): string =>
+    blocks
+      .filter(
+        (block): block is { type: string; text: string } =>
+          typeof block === "object" &&
+          block !== null &&
+          (block as { type?: unknown }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string",
+      )
+      .map((block) => block.text)
+      .join("\n");
+
+  // Shape #3: top-level array of content blocks.
+  if (Array.isArray(content)) {
+    return fromBlocks(content);
+  }
+
+  // Shape #4: object with a `content` array of blocks.
+  if (typeof content === "object" && "content" in content) {
+    const blocks = (content as { content?: unknown }).content;
+    if (Array.isArray(blocks)) {
+      return fromBlocks(blocks);
+    }
+  }
+
+  // Last-resort: stringify so the caller at least sees something useful
+  // rather than a silent empty result.
+  try {
+    return JSON.stringify(content);
+  } catch {
     return "";
   }
-  const result = content as { content?: unknown[] };
-  if (!Array.isArray(result.content)) {
-    return "";
-  }
-  return result.content
-    .filter((block: any) => block.type === "text" && typeof block.text === "string")
-    .map((block: any) => block.text)
-    .join("\n");
 }

@@ -114,26 +114,65 @@ export async function callTilionTool(
 ): Promise<string> {
   // Short top-level timeout so a missing/down bridge returns a graceful
   // error in ~1s instead of hanging the CLI for 30s on bridge startup.
-  const port = await withTimeout(
-    ensureTilionBridge(),
-    1500,
-    "tilion-mcp bridge did not become ready within 1500ms (is tilion-mcp installed and runnable?)",
-  );
+  //
+  // Exit watchdog: when the timeout fires, the inner ensureTilionBridge
+  // polling is still running for up to 30s. Without this watchdog, a CLI
+  // like `chrome-devtools-axi fortress persona-set` would print the
+  // timeout error and then block until the polling finishes — leaving
+  // the process alive long past its useful work. Exit 2 so callers can
+  // distinguish a bridge failure from a tool-call failure (exit 1).
+  //
+  // Ordering matters: REJECT first, then schedule the exit. The previous
+  // version called process.exit() before reject() could propagate, which
+  // meant the surrounding try/catch in fortressStatus/persona-set never
+  // got to format its FORTRESS_ERROR message — users saw only the raw
+  // watchdog stderr. Deferring the exit to a setImmediate gives the
+  // rejection a chance to land in the awaiting catch before the process
+  // goes away.
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let exitTimer: ReturnType<typeof setImmediate> | undefined;
   try {
-    const resp = await httpPost(port, "/call", { name, args });
-    const data = JSON.parse(resp);
-    if (data.error) {
-      throw new Error(data.error);
+    const port = await Promise.race([
+      Promise.resolve(ensureTilionBridge()),
+      new Promise<never>((_, reject) => {
+        watchdog = setTimeout(() => {
+          reject(
+            new Error(
+              "tilion-mcp bridge did not become ready within 1500ms (is tilion-mcp installed and runnable?)",
+            ),
+          );
+          // Exit after a short delay so the outer catch has time to log.
+          exitTimer = setImmediate(() => {
+            process.stderr.write(
+              "[tilion-client] bridge startup exceeded budget; exiting process to avoid hang\n",
+            );
+            process.exit(2);
+          });
+        }, 1500);
+      }),
+    ]);
+    try {
+      const resp = await httpPost(port, "/call", { name, args });
+      const data = JSON.parse(resp);
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      return data.result ?? "";
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Tilion tool call failed: ${message}`);
     }
-    return data.result ?? "";
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Tilion tool call failed: ${message}`);
+  } finally {
+    if (watchdog) clearTimeout(watchdog);
+    if (exitTimer) clearImmediate(exitTimer);
   }
 }
 
 export async function stopTilionBridge(): Promise<boolean> {
-  const pidInfo = readPidFile();
+  // Read the TILION-specific PID file, not the shared chrome bridge one.
+  const sessionName = resolveSessionName();
+  const pidFile = resolveTilionSessionPidFile(sessionName);
+  const pidInfo = readPidFile(pidFile);
   if (!pidInfo) return false;
   if (!isProcessAlive(pidInfo.pid)) return false;
   await terminateTilionBridgeProcess(pidInfo.pid);
