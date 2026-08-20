@@ -1771,7 +1771,9 @@ async function handleFortressReset(): Promise<string> {
     throw new CdpError(
       result.error || "fortress reset failed",
       "FORTRESS_ERROR",
-      ["Ensure tilion-mcp bridge is running (chrome-devtools-axi-tilion-bridge)"],
+      [
+        "Ensure tilion-mcp bridge is running (chrome-devtools-axi-tilion-bridge)",
+      ],
     );
   }
   blocks.push(`fortress reset: ${result.status}

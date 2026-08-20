@@ -94,9 +94,7 @@ function withTimeout<T>(
  * fortress persona set <persona-id> — switch to a specific stealth persona
  * Proxies through the tilion-mcp bridge
  */
-export async function fortressPersonaSet(
-  personaId: string,
-): Promise<{
+export async function fortressPersonaSet(personaId: string): Promise<{
   status: string;
   persona_id?: string;
   error?: string;
