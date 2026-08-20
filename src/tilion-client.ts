@@ -88,6 +88,12 @@ function checkTilionBridgeHealth(
  * Race a promise against a fixed timeout so callers fail fast when the
  * tilion-mcp bridge is absent or slow to start (instead of waiting the
  * full 30s ensureTilionBridge timeout).
+ *
+ * Note: this only short-circuits the *Promise*. Synchronous work inside
+ * the wrapped promise (e.g. execSync) will still block the event loop
+ * until it returns or the host kills the process. Callers that need to
+ * bound synchronous subprocesses should pair this with execSync({ timeout })
+ * or child_process.kill from a setTimeout.
  */
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
