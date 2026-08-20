@@ -11,7 +11,11 @@ export async function fortressStatus(): Promise<{
   error?: string;
 }> {
   try {
-    const result = await callTilionTool("fortress_status", {});
+    const result = await withTimeout(
+      callTilionTool("fortress_status", {}),
+      1000,
+      `fortress status timed out waiting for the tilion-mcp bridge on port ${process.env.CHROME_DEVTOOLS_AXI_TMCP_PORT ?? 9223}`
+    );
     return result as unknown as {
       persona?: string;
       fingerprint_state?: string;
@@ -22,6 +26,30 @@ export async function fortressStatus(): Promise<{
       error: `fortress status failed: ${error}`,
     };
   }
+}
+
+/**
+ * Race a promise against a fixed timeout so fortress commands fail fast
+ * (and gracefully) instead of hanging on a missing/down tilion-mcp bridge.
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 /**
