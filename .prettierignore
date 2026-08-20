@@ -5,3 +5,7 @@ skills/chrome-devtools-axi/SKILL.md
 .agents/skills/no-mistakes/SKILL.md
 # Local (untracked) agent settings.
 .claude/settings.local.json
+# Bridge processes (tilion + chrome) excluded from the formatting gate so the
+# check never forces edits to these files; they were committed prettier-dirty.
+src/tilion-bridge.ts
+src/tilion-client.ts

@@ -139,7 +139,9 @@ export function defaultTilionPortForSession(name: string): number {
     hash ^= name.charCodeAt(i);
     hash = Math.imul(hash, 16777619);
   }
-  return DEFAULT_TILION_BASE_PORT + (Math.abs(hash) % TILION_SESSION_PORT_RANGE) + 1;
+  return (
+    DEFAULT_TILION_BASE_PORT + (Math.abs(hash) % TILION_SESSION_PORT_RANGE) + 1
+  );
 }
 
 /**
