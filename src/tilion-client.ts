@@ -85,13 +85,34 @@ function checkTilionBridgeHealth(
 }
 
 /**
+ * Race a promise against a fixed timeout so callers fail fast when the
+ * tilion-mcp bridge is absent or slow to start (instead of waiting the
+ * full 30s ensureTilionBridge timeout).
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/**
  * Call a tilion-mcp tool through the bridge.
  */
 export async function callTilionTool(
   name: string,
   args: Record<string, unknown> = {},
 ): Promise<string> {
-  const port = await ensureTilionBridge();
+  // Short top-level timeout so a missing/down bridge returns a graceful
+  // error in ~1s instead of hanging the CLI for 30s on bridge startup.
+  const port = await withTimeout(
+    ensureTilionBridge(),
+    1500,
+    "tilion-mcp bridge did not become ready within 1500ms (is tilion-mcp installed and runnable?)",
+  );
   try {
     const resp = await httpPost(port, "/call", { name, args });
     const data = JSON.parse(resp);
