@@ -24,11 +24,12 @@ import { isProcessAlive } from "./client.js";
  * by a process that just happens to share the pid (PID-reuse scenario
  * on Linux). Mirrors the chrome bridge's isBridgeProcess helper.
  *
- * **Fail-closed:** if the probe errors or times out (ps not available,
- * permission denied, hung), return `true` — assume the existing PID
- * record is owned by a live tilion bridge. Failing open would let a
- * concurrent bridge on a different port overwrite a running bridge's
- * metadata. (See Greptile P1 "PID probe failure loses ownership".)
+ * Returns `false` on probe failure. The caller MUST treat the
+ * `false` return as inconclusive and fall back to isProcessAlive()
+ * — refusing to overwrite only if liveness confirms the pid is live.
+ * This means a transient probe failure cannot crash bridge startup
+ * permanently: only an actually-live pid can block overwrite. (See
+ * Greptile P1 "Probe failure locks PID ownership".)
  */
 function isTilionBridgeProcess(pid: number): boolean {
   try {
@@ -36,15 +37,9 @@ function isTilionBridgeProcess(pid: number): boolean {
       encoding: "utf-8",
       timeout: 1000,
     });
-    // Defensive substring check: a successful ps + a recognized
-    // marker = live tilion bridge. We don't strictly need the
-    // marker substring to be a particular location, just present.
     return command.includes("chrome-devtools-axi-tilion-bridge");
   } catch {
-    // ps failed (not installed, hung, permission denied, etc.) — fail
-    // CLOSED so we don't accidentally overwrite a live bridge's PID
-    // record because our probe couldn't run.
-    return true;
+    return false;
   }
 }
 
@@ -179,20 +174,41 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
         readFileSync(path, "utf8"),
       ) as Partial<PidFileContents>;
       if (existing.pid !== undefined && existing.pid !== process.pid) {
-        if (
-          isProcessAlive(existing.pid) &&
-          isTilionBridgeProcess(existing.pid)
-        ) {
-          // Live tilion bridge — refuse loudly. The caller should
-          // treat this as "another tilion bridge holds this slot;
-          // back off".
+        // Distinguish three states for the recorded pid:
+        //   1. Dead → overwrite OK
+        //   2. Alive AND is a tilion bridge → refuse (live owner)
+        //   3. Alive but NOT a tilion bridge → overwrite (PID reuse)
+        //
+        // The probe (`ps -p <pid>`) can fail for transient reasons
+        // (ps not installed, permission denied, hung). A blanket
+        // fail-closed would crash bridge startup forever if the
+        // probe is consistently unavailable. Instead, fall back to
+        // isProcessAlive() alone when the probe errors: this means
+        // a transient probe failure can only over-write if the
+        // recorded pid is dead, which is safe.
+        let ownedByLiveTilionBridge: boolean;
+        if (isProcessAlive(existing.pid)) {
+          // pid is alive; try the identity probe.
+          // If it errors, conservatively assume "live bridge" to
+          // refuse overwrite (prefer blocking a fresh bridge over
+          // clobbering a real one).
+          try {
+            ownedByLiveTilionBridge = isTilionBridgeProcess(existing.pid);
+          } catch {
+            ownedByLiveTilionBridge = true;
+          }
+        } else {
+          // pid is dead — overwrite regardless of identity.
+          ownedByLiveTilionBridge = false;
+        }
+        if (ownedByLiveTilionBridge) {
           throw new Error(
             `tilion PID file at ${path} is owned by live tilion bridge pid ${existing.pid}; ` +
               `another bridge holds this session. Not overwriting.`,
           );
         }
-        // Either dead OR alive but not a tilion bridge (PID reuse by
-        // an unrelated process) — fall through and overwrite.
+        // Either dead or PID reuse by an unrelated live process —
+        // fall through and overwrite.
       }
     } catch (err) {
       // Re-throw our own ownership conflict; swallow JSON.parse errors
