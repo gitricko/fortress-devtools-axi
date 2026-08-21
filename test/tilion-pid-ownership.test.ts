@@ -10,9 +10,15 @@
  * silently regress.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  mkdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 describe("PID file ownership", () => {
   let tmp: string;
@@ -166,5 +172,30 @@ describe("PID file ownership", () => {
       stillExists = false;
     }
     expect(stillExists).toBe(false);
+  });
+
+  it("THROWS if the PID lock file is held by another bridge", async () => {
+    // Atomicity: writeTilionPidFile takes a per-session lock file with
+    // O_CREAT|O_EXCL before validating/writing. If another process holds
+    // the lock, writeTilionPidFile must throw (not silently overwrite).
+    const mod = await import("../src/tilion-bridge-script.js");
+    const lockPath = mod.resolveTilionLockFile("default");
+    mkdirSync(dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, String(process.pid)); // simulate a held lock
+    try {
+      expect(() => mod.writeTilionPidFile(9225, "default")).toThrow(
+        /tilion PID lock at .* is held by another bridge process/,
+      );
+      // Ensure the PID file was NOT written (the lock prevented it).
+      let pidExists = true;
+      try {
+        readFileSync(mod.resolveTilionPidFile("default"), "utf8");
+      } catch {
+        pidExists = false;
+      }
+      expect(pidExists).toBe(false);
+    } finally {
+      rmSync(lockPath, { force: true });
+    }
   });
 });
