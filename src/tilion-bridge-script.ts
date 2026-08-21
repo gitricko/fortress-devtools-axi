@@ -165,16 +165,54 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
   // bridges can no longer both pass validation and clobber each other's
   // metadata. (See Greptile P1 "PID ownership can still be corrupted by
   // concurrent bridge startup".)
-  let lockFd: number;
-  try {
-    lockFd = openSync(lockPath, "wx");
-  } catch (err) {
-    // EEXIST (or other) — another bridge holds the slot. Refuse loudly
-    // so the operator sees the conflict instead of silently inheriting
-    // the other bridge's metadata. (See Greptile P1 "Refused PID write
-    // claims ownership"; the silent-return variant was the bug.)
+  //
+  // Stale-lock safety: if a bridge crashes between acquiring the lock
+  // and releasing it (the `finally` below), the lock file would remain
+  // forever and permanently block the session. To avoid that, the lock
+  // file records the holding process's pid; on acquire, if a lock
+  // already exists we check whether that pid is still alive. A dead
+  // holder means the lock is stale — we remove it and retry. (See
+  // Greptile P1 "Stale lock blocks bridge startup".)
+  let lockFd: number = -1;
+  let lockAcquired = false;
+  for (let attempt = 0; attempt < 2 && !lockAcquired; attempt++) {
+    try {
+      lockFd = openSync(lockPath, "wx");
+      // Record our pid inside the lock so a later process can detect a
+      // stale lock left by a crashed bridge.
+      try {
+        writeFileSync(lockPath, String(process.pid));
+      } catch {
+        // non-fatal; the exclusive create already serializes us
+      }
+      lockAcquired = true;
+    } catch (err) {
+      // EEXIST — lock held. Check for a stale (dead-holder) lock.
+      if ((err as NodeJS.ErrnoException)?.code === "EEXIST") {
+        try {
+          const holderPid = Number(readFileSync(lockPath, "utf8").trim());
+          if (Number.isFinite(holderPid) && !isProcessAlive(holderPid)) {
+            // Stale lock from a crashed bridge — remove and retry once.
+            unlinkSync(lockPath);
+            continue;
+          }
+        } catch {
+          // Can't read the holder pid; leave the lock in place and fail.
+        }
+      }
+      // Live holder (or unreadable) — refuse loudly so the operator
+      // sees the conflict instead of silently inheriting the other
+      // bridge's metadata. (See Greptile P1 "Refused PID write claims
+      // ownership"; the silent-return variant was the bug.)
+      throw new Error(
+        `tilion PID lock at ${lockPath} is held by another bridge process; ` +
+          `another bridge holds this session. Not overwriting.`,
+      );
+    }
+  }
+  if (!lockAcquired) {
     throw new Error(
-      `tilion PID lock at ${lockPath} is held by another bridge process; ` +
+      `tilion PID lock at ${lockPath} could not be acquired; ` +
         `another bridge holds this session. Not overwriting.`,
     );
   }
@@ -239,10 +277,12 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
   } finally {
     // Always release the lock (close + unlink) so the next bridge can
     // acquire it. The PID file on disk is the source of truth.
-    try {
-      closeSync(lockFd);
-    } catch {
-      // ignore
+    if (lockFd >= 0) {
+      try {
+        closeSync(lockFd);
+      } catch {
+        // ignore
+      }
     }
     try {
       unlinkSync(lockPath);

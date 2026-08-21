@@ -198,4 +198,25 @@ describe("PID file ownership", () => {
       rmSync(lockPath, { force: true });
     }
   });
+
+  it("recovers from a stale lock left by a crashed bridge", async () => {
+    // Stale-lock safety: if a previous bridge crashed while holding the
+    // lock, the lock file remains with a dead holder pid. A new bridge
+    // must detect the dead holder and remove the stale lock, not refuse.
+    const mod = await import("../src/tilion-bridge-script.js");
+    const lockPath = mod.resolveTilionLockFile("default");
+    mkdirSync(dirname(lockPath), { recursive: true });
+    // Record a pid that is definitely dead (1 is always init/swapper).
+    writeFileSync(lockPath, "1");
+    try {
+      expect(() => mod.writeTilionPidFile(9225, "default")).not.toThrow();
+      const contents = JSON.parse(
+        readFileSync(mod.resolveTilionPidFile("default"), "utf8"),
+      );
+      expect(contents.pid).toBe(process.pid);
+    } finally {
+      rmSync(mod.resolveTilionPidFile("default"), { force: true });
+      rmSync(lockPath, { force: true });
+    }
+  });
 });
