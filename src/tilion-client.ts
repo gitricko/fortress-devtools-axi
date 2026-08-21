@@ -131,17 +131,26 @@ export async function callTilionTool(
   // goes away.
   let watchdog: ReturnType<typeof setTimeout> | undefined;
   let exitTimer: ReturnType<typeof setImmediate> | undefined;
+  // Tracks whether the watchdog timeout has actually fired. The finally
+  // block must NOT clear the pending exit if it has — otherwise the
+  // process keeps running with `ensureTilionBridge`'s polling alive for
+  // the full 30s. (See #9 in Greptile review.)
+  let watchdogFired = false;
   try {
     const port = await Promise.race([
       Promise.resolve(ensureTilionBridge()),
       new Promise<never>((_, reject) => {
         watchdog = setTimeout(() => {
+          watchdogFired = true;
           reject(
             new Error(
               "tilion-mcp bridge did not become ready within 1500ms (is tilion-mcp installed and runnable?)",
             ),
           );
-          // Exit after a short delay so the outer catch has time to log.
+          // Exit on the NEXT tick (after the rejection has propagated
+          // through the Promise.race and any surrounding try/catch can log
+          // the formatted error). The finally block will NOT cancel this
+          // because `watchdogFired` is true.
           exitTimer = setImmediate(() => {
             process.stderr.write(
               "[tilion-client] bridge startup exceeded budget; exiting process to avoid hang\n",
@@ -163,8 +172,12 @@ export async function callTilionTool(
       throw new Error(`Tilion tool call failed: ${message}`);
     }
   } finally {
-    if (watchdog) clearTimeout(watchdog);
-    if (exitTimer) clearImmediate(exitTimer);
+    // Only cancel the watchdog / exit if the timeout has NOT fired.
+    // If it has fired, the exit was scheduled for a reason — keep it.
+    if (!watchdogFired) {
+      if (watchdog) clearTimeout(watchdog);
+      if (exitTimer) clearImmediate(exitTimer);
+    }
   }
 }
 

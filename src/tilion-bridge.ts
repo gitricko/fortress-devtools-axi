@@ -167,7 +167,7 @@ export async function runTilionBridge(port: number = resolveSessionPort()): Prom
   process.on("SIGINT", shutdown);
 }
 
-function extractToolText(content: unknown): string {
+export function extractToolText(content: unknown): string {
   // MCP tool-call responses can come in several shapes:
   //   1. undefined / null                       (tool returned no content)
   //   2. string                                  (older / non-standard MCP servers)
