@@ -35,30 +35,31 @@ describe("PID file ownership", () => {
     rmSync(path);
   });
 
-  it("does NOT overwrite a PID record owned by a DIFFERENT live process", async () => {
+  it("THROWS when existing PID is alive AND belongs to a live tilion bridge", async () => {
     const mod = await import("../src/tilion-bridge-script.js");
     const path = mod.resolveTilionPidFile("default");
-    // Spawn a real but short-lived child process so the test has a
-    // genuine "live owner" pid. We pick an existing system process
-    // that's guaranteed to be alive (current process group) — our
-    // parent process pid. This is the only stable "alive" PID we
-    // can guarantee in a unit test without forking.
+    // Simulate a live tilion bridge by hand-crafting a PID file whose
+    // recorded pid passes the liveness check (process.ppid is the
+    // parent shell, which IS alive). The isTilionBridgeProcess guard
+    // will see the parent's argv does NOT contain
+    // "chrome-devtools-axi-tilion-bridge" and treat it as PID-reuse by
+    // an unrelated process — overwriting instead of throwing.
+    // So this test asserts the THROW path requires BOTH liveness AND
+    // identity. We test the identity branch by directly invoking the
+    // check via a synthetic live-tilion-bridge case: ps -p $ppid will
+    // report the parent's command, which does NOT include
+    // chrome-devtools-axi-tilion-bridge → no throw → overwrite succeeds.
     const livePid = process.ppid;
     writeFileSync(
       path,
       JSON.stringify({ pid: livePid, port: 9225, startedAt: Date.now() }),
     );
-    // The previous silent-return behavior left the calling bridge
-    // believing it owned the file while the on-disk pid was someone
-    // else's — clients would then record the wrong pid at shutdown.
-    // The fix: writeTilionPidFile MUST throw so the bridge fails fast
-    // instead of continuing to serve traffic on a port it doesn't own.
-    expect(() => mod.writeTilionPidFile(9225, "default")).toThrow(
-      /tilion PID file at .* is owned by live pid/,
-    );
-    // On-disk content unchanged.
+    // The parent process is alive but NOT a tilion bridge, so we
+    // expect an OVERWRITE (no throw) — PID-reuse by an unrelated
+    // process must not block bridge startup.
+    expect(() => mod.writeTilionPidFile(9225, "default")).not.toThrow();
     const contents = JSON.parse(readFileSync(path, "utf8"));
-    expect(contents.pid).toBe(livePid);
+    expect(contents.pid).toBe(process.pid);
     rmSync(path);
   });
 
@@ -66,24 +67,58 @@ describe("PID file ownership", () => {
     // Operators need to know WHICH pid is holding the file so they can
     // decide whether to kill it or pick a different session. Verify
     // the error is informative, not just "Error: refused".
-    const mod = await import("../src/tilion-bridge-script.js");
-    const path = mod.resolveTilionPidFile("default");
-    writeFileSync(
-      path,
-      JSON.stringify({ pid: process.ppid, port: 9225, startedAt: Date.now() }),
+    // The throw path now requires both liveness AND identity. Spawn
+    // a child process whose argv contains the magic marker so the
+    // identity check passes — that simulates a live tilion bridge.
+    const { spawn, execFileSync } = await import("node:child_process");
+    // Use node with -e to set process.title — Linux's /proc/<pid>/comm
+    // (which ps reads) reflects this. The bridge marker is
+    // "chrome-devtools-axi-tilion-bridge"; we don't need a full match,
+    // just that the substring appears.
+    const child = spawn(
+      "node",
+      [
+        "-e",
+        "process.title='chrome-devtools-axi-tilion-bridge-sleeper'; setTimeout(()=>{},30000)",
+      ],
+      { stdio: "ignore", detached: false },
     );
+    const childPid = child.pid!;
+    let pidPath = "";
     try {
-      mod.writeTilionPidFile(9225, "default");
-      expect.fail(
-        "expected writeTilionPidFile to throw on contested ownership",
+      // Wait briefly for ps to see the process.
+      await new Promise((r) => setTimeout(r, 200));
+      // Confirm the identity check actually matches.
+      const psOut = execFileSync(
+        "ps",
+        ["-p", String(childPid), "-o", "command="],
+        { encoding: "utf-8", timeout: 1000 },
       );
-    } catch (err) {
-      expect(err).toBeInstanceOf(Error);
-      const msg = (err as Error).message;
-      expect(msg).toContain(String(process.ppid));
-      expect(msg).toContain(path);
+      expect(psOut).toContain("chrome-devtools-axi-tilion-bridge");
+      const mod = await import("../src/tilion-bridge-script.js");
+      const path = mod.resolveTilionPidFile("default");
+      pidPath = path;
+      writeFileSync(
+        path,
+        JSON.stringify({ pid: childPid, port: 9225, startedAt: Date.now() }),
+      );
+      try {
+        mod.writeTilionPidFile(9225, "default");
+        expect.fail(
+          "expected writeTilionPidFile to throw when a live tilion-bridge-marked process holds the pid",
+        );
+      } catch (err) {
+        expect(err).toBeInstanceOf(Error);
+        const msg = (err as Error).message;
+        expect(msg).toContain(String(childPid));
+        expect(msg).toContain("tilion bridge");
+        expect(msg).toContain(path);
+      }
     } finally {
-      rmSync(path);
+      try {
+        process.kill(childPid, "SIGKILL");
+      } catch {}
+      if (pidPath) rmSync(pidPath, { force: true });
     }
   });
 

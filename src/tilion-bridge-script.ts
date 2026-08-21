@@ -11,10 +11,30 @@ import {
   unlinkSync,
   mkdirSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { resolve } from "node:path";
 import { resolveSessionStateDir } from "./sessions.js";
 import { isProcessAlive } from "./client.js";
+
+/**
+ * Return true if the process at `pid` is plausibly a tilion bridge —
+ * i.e. its argv contains "chrome-devtools-axi-tilion-bridge". Used by
+ * PID-file ownership checks to refuse overwriting/serving a slot held
+ * by a process that just happens to share the pid (PID-reuse scenario
+ * on Linux). Mirrors the chrome bridge's isBridgeProcess helper.
+ */
+function isTilionBridgeProcess(pid: number): boolean {
+  try {
+    const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf-8",
+      timeout: 1000,
+    });
+    return command.includes("chrome-devtools-axi-tilion-bridge");
+  } catch {
+    return false;
+  }
+}
 
 export function resolveTilionBridgeScript(importMetaDir: string): string {
   const builtScript = resolve(
@@ -120,6 +140,17 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
   // (overwrite OK) from live (refuse). (See Greptile P1 "Stale PID
   // blocks bridge ownership".)
   //
+  // PID-reuse safety: liveness alone is not enough. On Linux, PIDs
+  // can be reused between process exit and a new unrelated process
+  // starting; the new process would inherit the pid and be live but
+  // NOT be a tilion bridge. isProcessAlive would say "live" and we'd
+  // refuse to overwrite — indefinitely blocking a fresh bridge from
+  // claiming the slot. Use isTilionBridgeProcess (checks argv contains
+  // "chrome-devtools-axi-tilion-bridge") instead, so an unrelated
+  // process at the recorded pid no longer blocks the new bridge.
+  // (See Greptile P1 "stale PID reused by an unrelated live process
+  // can still prevent the Tilion bridge from starting".)
+  //
   // Refusal must THROW, not return silently. The previous silent-
   // return path left the calling bridge believing it had written the
   // file, so it would continue serving requests on the port — but the
@@ -136,15 +167,20 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
         readFileSync(path, "utf8"),
       ) as Partial<PidFileContents>;
       if (existing.pid !== undefined && existing.pid !== process.pid) {
-        if (isProcessAlive(existing.pid)) {
-          // Live owner — refuse loudly. The caller should treat this
-          // as "another bridge holds this slot; back off".
+        if (
+          isProcessAlive(existing.pid) &&
+          isTilionBridgeProcess(existing.pid)
+        ) {
+          // Live tilion bridge — refuse loudly. The caller should
+          // treat this as "another tilion bridge holds this slot;
+          // back off".
           throw new Error(
-            `tilion PID file at ${path} is owned by live pid ${existing.pid}; ` +
+            `tilion PID file at ${path} is owned by live tilion bridge pid ${existing.pid}; ` +
               `another bridge holds this session. Not overwriting.`,
           );
         }
-        // Dead owner — fall through and overwrite.
+        // Either dead OR alive but not a tilion bridge (PID reuse by
+        // an unrelated process) — fall through and overwrite.
       }
     } catch (err) {
       // Re-throw our own ownership conflict; swallow JSON.parse errors
