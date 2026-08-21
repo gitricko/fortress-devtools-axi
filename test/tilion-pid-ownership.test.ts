@@ -48,12 +48,43 @@ describe("PID file ownership", () => {
       path,
       JSON.stringify({ pid: livePid, port: 9225, startedAt: Date.now() }),
     );
-    // Try to write ours.
-    mod.writeTilionPidFile(9225, "default");
+    // The previous silent-return behavior left the calling bridge
+    // believing it owned the file while the on-disk pid was someone
+    // else's — clients would then record the wrong pid at shutdown.
+    // The fix: writeTilionPidFile MUST throw so the bridge fails fast
+    // instead of continuing to serve traffic on a port it doesn't own.
+    expect(() => mod.writeTilionPidFile(9225, "default")).toThrow(
+      /tilion PID file at .* is owned by live pid/,
+    );
+    // On-disk content unchanged.
     const contents = JSON.parse(readFileSync(path, "utf8"));
-    // Should still be the original record, not ours.
     expect(contents.pid).toBe(livePid);
     rmSync(path);
+  });
+
+  it("throw message names the conflict pid and the file path", async () => {
+    // Operators need to know WHICH pid is holding the file so they can
+    // decide whether to kill it or pick a different session. Verify
+    // the error is informative, not just "Error: refused".
+    const mod = await import("../src/tilion-bridge-script.js");
+    const path = mod.resolveTilionPidFile("default");
+    writeFileSync(
+      path,
+      JSON.stringify({ pid: process.ppid, port: 9225, startedAt: Date.now() }),
+    );
+    try {
+      mod.writeTilionPidFile(9225, "default");
+      expect.fail(
+        "expected writeTilionPidFile to throw on contested ownership",
+      );
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
+      const msg = (err as Error).message;
+      expect(msg).toContain(String(process.ppid));
+      expect(msg).toContain(path);
+    } finally {
+      rmSync(path);
+    }
   });
 
   it("DOES overwrite a stale PID record (same pid, dead process)", async () => {

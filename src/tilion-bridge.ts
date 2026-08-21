@@ -128,6 +128,11 @@ export async function runTilionBridge(port: number = resolveSessionPort()): Prom
     // chrome bridge's `bridge.pid`. The two bridges have different PID
     // records so ensureTilionBridge can find this process without
     // clobbering the chrome bridge's PID (and vice-versa).
+    // If ownership is contested by a live bridge, writeTilionPidFile
+    // throws — we let the throw propagate so the bridge exits with a
+    // clear conflict message rather than continuing to serve traffic
+    // on a port it doesn't own. (See Greptile P1 "Refused PID write
+    // claims ownership".)
     writeTilionPidFile(port, sessionName);
     // Mark ownership so the exit handler knows it may safely remove
     // the PID file. If `listen` later errors (EADDRINUSE), we never

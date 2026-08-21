@@ -107,17 +107,29 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
   }
   // Concurrent-bridge safety: refuse to clobber an existing record of
   // a LIVE bridge. If two bridges race for the same session port, the
-  // loser would silently overwrite the winner's PID record, making
-  // the running bridge undiscoverable. The owning bridge process also
-  // tracks this via `ownsPidFile`, but the script-level guard catches
-  // the case where one bridge is started before the other has fully
-  // exited. (See Greptile P1 "Concurrent bridges overwrite PID".)
+  // loser must NOT silently overwrite the winner's PID record (that
+  // would make the running bridge undiscoverable). The owning bridge
+  // process also tracks this via `ownsPidFile`, but the script-level
+  // guard catches the case where one bridge is started before the
+  // other has fully exited. (See Greptile P1 "Concurrent bridges
+  // overwrite PID".)
   //
   // Stale-PID safety: a previous run may have left a PID file whose
   // process is now dead. Refusing to overwrite it would lock the
   // session permanently. Use isProcessAlive to distinguish dead
   // (overwrite OK) from live (refuse). (See Greptile P1 "Stale PID
   // blocks bridge ownership".)
+  //
+  // Refusal must THROW, not return silently. The previous silent-
+  // return path left the calling bridge believing it had written the
+  // file, so it would continue serving requests on the port — but the
+  // PID file on disk still belonged to a different bridge. Clients
+  // reading the PID file would discover the running bridge but record
+  // the wrong pid, breaking later shutdown. Throwing makes the bridge
+  // fail-fast at startup when ownership is contested, so the operator
+  // sees the conflict instead of silently inheriting the other
+  // bridge's metadata. (See Greptile P1 "Refused PID write claims
+  // ownership".)
   if (existsSync(path)) {
     try {
       const existing = JSON.parse(
@@ -125,12 +137,24 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
       ) as Partial<PidFileContents>;
       if (existing.pid !== undefined && existing.pid !== process.pid) {
         if (isProcessAlive(existing.pid)) {
-          // Live owner — refuse to clobber.
-          return;
+          // Live owner — refuse loudly. The caller should treat this
+          // as "another bridge holds this slot; back off".
+          throw new Error(
+            `tilion PID file at ${path} is owned by live pid ${existing.pid}; ` +
+              `another bridge holds this session. Not overwriting.`,
+          );
         }
         // Dead owner — fall through and overwrite.
       }
-    } catch {
+    } catch (err) {
+      // Re-throw our own ownership conflict; swallow JSON.parse errors
+      // on the existing file (corrupt) so the overwrite can proceed.
+      if (
+        err instanceof Error &&
+        err.message.startsWith("tilion PID file at")
+      ) {
+        throw err;
+      }
       // Existing file is corrupt; overwrite it.
     }
   }
