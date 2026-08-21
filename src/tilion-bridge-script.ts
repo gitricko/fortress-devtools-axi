@@ -324,3 +324,4 @@ export interface BridgeCallPayload {
   name: string;
   args: Record<string, unknown>;
 }
+
