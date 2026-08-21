@@ -10,8 +10,6 @@ import {
   readFileSync,
   unlinkSync,
   mkdirSync,
-  openSync,
-  closeSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -181,18 +179,17 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
   // (crash between openSync and the pid write) is treated as stale,
   // never as a live pid 0. (See Greptile P1 "Stale lock blocks bridge
   // startup" + "Empty stale lock stays permanent".)
-  let lockFd: number = -1;
   let lockAcquired = false;
   for (let attempt = 0; attempt < 2 && !lockAcquired; attempt++) {
+    // Use writeFileSync with the `wx` flag (O_CREAT|O_EXCL|O_WRONLY)
+    // so the create + pid write is a SINGLE atomic syscall. Previously
+    // we did openSync("wx") then writeFileSync, leaving an empty lock
+    // between those two operations; a competing process could see the
+    // empty content, treat it as stale, unlink it, and both processes
+    // would proceed into ownership updates. (See Greptile P1 "Stale
+    // recovery deletes live lock" + "Empty stale lock stays permanent".)
     try {
-      lockFd = openSync(lockPath, "wx");
-      // Record our pid inside the lock so a later process can detect a
-      // stale lock left by a crashed bridge.
-      try {
-        writeFileSync(lockPath, String(process.pid));
-      } catch {
-        // non-fatal; the exclusive create already serializes us
-      }
+      writeFileSync(lockPath, String(process.pid), { flag: "wx" });
       lockAcquired = true;
     } catch (err) {
       // EEXIST — lock held. Check for a stale (dead-holder) lock.
@@ -229,12 +226,6 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
         `another bridge holds this session. Not overwriting.`,
     );
   }
-  try {
-    closeSync(lockFd);
-  } catch {
-    // ignore
-  }
-  lockFd = -1;
   // Release the lifetime lock on exit. process.on("exit") handlers run
   // synchronously during process teardown, before the event loop drains.
   process.once("exit", () => {
