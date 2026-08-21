@@ -53,21 +53,40 @@ function fortressStatusWithDeadline(): Promise<{
       clearTimeout(watchdog);
       // The bridge returns the decoded tool-text from `extractToolText`,
       // which is always a string. The fortress_status tool's text IS a
-      // JSON object stringified for transport, so parse it back. If it
-      // fails, return an empty object and let downstream consumers
-      // see "missing" fields instead of `undefined` from a bad cast.
+      // JSON object stringified for transport, so parse it back. If
+      // parsing fails OR the parsed object is missing the fields we
+      // expect, surface that explicitly — silently returning {} makes
+      // downstream consumers treat a malformed response as a healthy
+      // empty status. (See Greptile P1 "Fortress status converts
+      // malformed payloads into healthy-looking defaults".)
       let parsed: {
         persona?: string;
         fingerprint_state?: string;
         ua?: string;
-      } = {};
+        healthy?: boolean;
+        error?: string;
+      };
       try {
         parsed = JSON.parse(value) as typeof parsed;
-      } catch {
-        // Tool returned a non-JSON string (e.g. plain status text).
-        // Leave parsed as {} — callers handle missing fields gracefully.
+      } catch (err) {
+        return {
+          healthy: false,
+          error: `fortress_status returned non-JSON payload: ${(err as Error).message}`,
+        };
       }
-      return parsed;
+      // Validate that the response looks like a fortress_status shape.
+      // A missing `persona` field in a successful response is suspicious
+      // — surface it instead of letting downstream see `undefined`.
+      if (typeof parsed.persona !== "string") {
+        return {
+          healthy: false,
+          error:
+            "fortress_status response missing required `persona` field; " +
+            "the bridge may have forwarded a different tool's result",
+          ...parsed,
+        };
+      }
+      return { healthy: true, ...parsed };
     })
     .catch((err) => {
       // Error path: the underlying bridge poll may still hold the event loop
@@ -138,8 +157,20 @@ export async function fortressPersonaSet(personaId: string): Promise<{
           "fortress persona set returned a non-JSON payload; result not verified",
       };
     }
+    // Don't synthesize `status: "applied"` when parsed JSON omits the
+    // status field — a valid response missing status is suspicious.
+    // Mark indeterminate and require operator verification.
+    if (typeof parsed.status !== "string") {
+      return {
+        status: "indeterminate",
+        persona_id: parsed.persona_id ?? personaId,
+        error:
+          "fortress persona set response missing required `status` field; " +
+          "operation may not have completed as expected",
+      };
+    }
     return {
-      status: parsed.status ?? "applied",
+      status: parsed.status,
       persona_id: parsed.persona_id ?? personaId,
     };
   } catch (error) {
@@ -173,7 +204,17 @@ export async function fortressReset(): Promise<{
           "fortress reset returned a non-JSON payload; result not verified",
       };
     }
-    return { status: parsed.status ?? "ok" };
+    // Don't synthesize `status: "ok"` when parsed JSON omits the status
+    // field — same rationale as persona_set.
+    if (typeof parsed.status !== "string") {
+      return {
+        status: "indeterminate",
+        error:
+          "fortress reset response missing required `status` field; " +
+          "operation may not have completed as expected",
+      };
+    }
+    return { status: parsed.status };
   } catch (error) {
     return {
       status: "error",
