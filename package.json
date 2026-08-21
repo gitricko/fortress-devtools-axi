@@ -1,6 +1,6 @@
 {
   "name": "fortress-devtools-axi",
-  "version": "0.1.0-fortress.1",
+  "version": "0.1.18",
   "packageManager": "pnpm@11.1.1",
   "description": "AXI-compliant CLI wrapper around Fortress (stealth Chromium) — combined operations, TOON output, contextual suggestions",
   "type": "module",
