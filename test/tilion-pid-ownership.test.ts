@@ -35,19 +35,24 @@ describe("PID file ownership", () => {
     rmSync(path);
   });
 
-  it("does NOT overwrite a PID record owned by a different live process", async () => {
+  it("does NOT overwrite a PID record owned by a DIFFERENT live process", async () => {
     const mod = await import("../src/tilion-bridge-script.js");
     const path = mod.resolveTilionPidFile("default");
-    // Pretend another bridge owns it.
+    // Spawn a real but short-lived child process so the test has a
+    // genuine "live owner" pid. We pick an existing system process
+    // that's guaranteed to be alive (current process group) — our
+    // parent process pid. This is the only stable "alive" PID we
+    // can guarantee in a unit test without forking.
+    const livePid = process.ppid;
     writeFileSync(
       path,
-      JSON.stringify({ pid: 999999, port: 9225, startedAt: Date.now() }),
+      JSON.stringify({ pid: livePid, port: 9225, startedAt: Date.now() }),
     );
     // Try to write ours.
     mod.writeTilionPidFile(9225, "default");
     const contents = JSON.parse(readFileSync(path, "utf8"));
     // Should still be the original record, not ours.
-    expect(contents.pid).toBe(999999);
+    expect(contents.pid).toBe(livePid);
     rmSync(path);
   });
 

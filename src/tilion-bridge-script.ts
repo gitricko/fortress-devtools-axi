@@ -14,6 +14,7 @@ import {
 import { join } from "node:path";
 import { resolve } from "node:path";
 import { resolveSessionStateDir } from "./sessions.js";
+import { isProcessAlive } from "./client.js";
 
 export function resolveTilionBridgeScript(importMetaDir: string): string {
   const builtScript = resolve(
@@ -105,22 +106,29 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
     mkdirSync(sessionDir, { recursive: true });
   }
   // Concurrent-bridge safety: refuse to clobber an existing record of
-  // a DIFFERENT live bridge. If two bridges race for the same session
-  // port, the loser would silently overwrite the winner's PID record,
-  // making the running bridge undiscoverable. The owning bridge process
-  // also tracks this via `ownsPidFile`, but the script-level guard
-  // catches the case where one bridge is started before the other has
-  // fully exited. (See Greptile P1 "Concurrent bridges overwrite PID".)
+  // a LIVE bridge. If two bridges race for the same session port, the
+  // loser would silently overwrite the winner's PID record, making
+  // the running bridge undiscoverable. The owning bridge process also
+  // tracks this via `ownsPidFile`, but the script-level guard catches
+  // the case where one bridge is started before the other has fully
+  // exited. (See Greptile P1 "Concurrent bridges overwrite PID".)
+  //
+  // Stale-PID safety: a previous run may have left a PID file whose
+  // process is now dead. Refusing to overwrite it would lock the
+  // session permanently. Use isProcessAlive to distinguish dead
+  // (overwrite OK) from live (refuse). (See Greptile P1 "Stale PID
+  // blocks bridge ownership".)
   if (existsSync(path)) {
     try {
       const existing = JSON.parse(
         readFileSync(path, "utf8"),
       ) as Partial<PidFileContents>;
-      if (existing.pid !== process.pid) {
-        // Reject — the other bridge owns this slot. The bridge process
-        // should already have caught EADDRINUSE on its listen, but this
-        // is a final safety net.
-        return;
+      if (existing.pid !== undefined && existing.pid !== process.pid) {
+        if (isProcessAlive(existing.pid)) {
+          // Live owner — refuse to clobber.
+          return;
+        }
+        // Dead owner — fall through and overwrite.
       }
     } catch {
       // Existing file is corrupt; overwrite it.

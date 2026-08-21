@@ -124,20 +124,24 @@ export async function fortressPersonaSet(personaId: string): Promise<{
     });
     // Bridge returns the decoded text (string); persona_set transports
     // a JSON object inside that string. Parse it; if the tool returns
-    // plain status text instead, return a default with the parsed
-    // persona_id so downstream sees success.
+    // plain non-JSON text, treat it as an indeterminate result and
+    // surface that to the caller rather than silently synthesising
+    // success. (See Greptile P1 "Invalid payload becomes successful result".)
+    let parsed: { status?: string; persona_id?: string };
     try {
-      const parsed = JSON.parse(result) as {
-        status?: string;
-        persona_id?: string;
-      };
-      return {
-        status: parsed.status ?? "applied",
-        persona_id: parsed.persona_id ?? personaId,
-      };
+      parsed = JSON.parse(result) as typeof parsed;
     } catch {
-      return { status: "applied", persona_id: personaId };
+      return {
+        status: "indeterminate",
+        persona_id: personaId,
+        error:
+          "fortress persona set returned a non-JSON payload; result not verified",
+      };
     }
+    return {
+      status: parsed.status ?? "applied",
+      persona_id: parsed.persona_id ?? personaId,
+    };
   } catch (error) {
     return {
       status: "error",
@@ -157,14 +161,19 @@ export async function fortressReset(): Promise<{
   try {
     const result = await callTilionTool("fortress_reset", {});
     // Bridge returns the decoded text (string); reset transports a JSON
-    // object inside that string. Parse it; fall back to a default success
-    // shape if the tool returns plain status text.
+    // object inside that string. If it returns plain non-JSON text,
+    // surface that as indeterminate rather than synthesising success.
+    let parsed: { status?: string };
     try {
-      const parsed = JSON.parse(result) as { status?: string };
-      return { status: parsed.status ?? "ok" };
+      parsed = JSON.parse(result) as typeof parsed;
     } catch {
-      return { status: "ok" };
+      return {
+        status: "indeterminate",
+        error:
+          "fortress reset returned a non-JSON payload; result not verified",
+      };
     }
+    return { status: parsed.status ?? "ok" };
   } catch (error) {
     return {
       status: "error",
