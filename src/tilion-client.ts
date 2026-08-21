@@ -3,7 +3,7 @@ import { resolveSessionName, resolveTilionSessionPort, resolveTilionSessionPidFi
 import { writePidFile, removePidFile, getErrorMessage } from "./bridge.js";
 import { httpGet, httpPost, isProcessAlive, readPidFile } from "./client.js";
 import { resolveTilionBridgeScript, TILION_BRIDGE_PORT_IN_USE_EXIT_CODE } from "./tilion-bridge-script.js";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
 interface SpawnedBridge {
@@ -236,6 +236,26 @@ function buildTilionBridgeEarlyExitError(
 }
 
 function terminateTilionBridgeProcess(pid: number): void {
+  // PID-reuse safety: before sending a signal, verify the process at
+  // `pid` is actually a chrome-devtools-axi-tilion-bridge. PIDs can be
+  // reused on Linux between process exit and a new unrelated process
+  // starting, so blindly signaling any live PID could terminate the
+  // wrong process. The chrome bridge does the same check via
+  // isBridgeProcess. (See Greptile P1 "Reused PID kills unrelated
+  // process".)
+  try {
+    const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf-8",
+      timeout: 1000,
+    });
+    if (!command.includes("chrome-devtools-axi-tilion-bridge")) {
+      // PID reused by an unrelated process — refuse to signal.
+      return;
+    }
+  } catch {
+    // ps failed (pid not found, or timed out) — refuse to signal.
+    return;
+  }
   try {
     process.kill(-pid, "SIGTERM");
   } catch {

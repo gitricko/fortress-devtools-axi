@@ -4,7 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client";
 import { Server } from "node:http";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
-import { resolveSessionPort, resolveSessionName } from "./sessions.js";
+import { resolveSessionName, resolveTilionSessionPort } from "./sessions.js";
 import { getErrorMessage, buildTransportArgs } from "./bridge.js";
 import { isProcessAlive } from "./client.js";
 import { isRequestAllowed } from "./bridge.js";
@@ -22,7 +22,9 @@ export async function probeTilionPrerequisites(): Promise<void> {
   // Implementation for checking tilion-mcp availability
 }
 
-export async function runTilionBridge(port: number = resolveSessionPort()): Promise<void> {
+export async function runTilionBridge(
+  port: number = resolveTilionSessionPort(),
+): Promise<void> {
   // Probe tilion-mcp prerequisites before spawning
   await probeTilionPrerequisites();
 
