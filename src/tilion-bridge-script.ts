@@ -23,6 +23,12 @@ import { isProcessAlive } from "./client.js";
  * PID-file ownership checks to refuse overwriting/serving a slot held
  * by a process that just happens to share the pid (PID-reuse scenario
  * on Linux). Mirrors the chrome bridge's isBridgeProcess helper.
+ *
+ * **Fail-closed:** if the probe errors or times out (ps not available,
+ * permission denied, hung), return `true` — assume the existing PID
+ * record is owned by a live tilion bridge. Failing open would let a
+ * concurrent bridge on a different port overwrite a running bridge's
+ * metadata. (See Greptile P1 "PID probe failure loses ownership".)
  */
 function isTilionBridgeProcess(pid: number): boolean {
   try {
@@ -30,9 +36,15 @@ function isTilionBridgeProcess(pid: number): boolean {
       encoding: "utf-8",
       timeout: 1000,
     });
+    // Defensive substring check: a successful ps + a recognized
+    // marker = live tilion bridge. We don't strictly need the
+    // marker substring to be a particular location, just present.
     return command.includes("chrome-devtools-axi-tilion-bridge");
   } catch {
-    return false;
+    // ps failed (not installed, hung, permission denied, etc.) — fail
+    // CLOSED so we don't accidentally overwrite a live bridge's PID
+    // record because our probe couldn't run.
+    return true;
   }
 }
 

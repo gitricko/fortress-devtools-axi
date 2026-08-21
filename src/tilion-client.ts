@@ -243,6 +243,10 @@ function terminateTilionBridgeProcess(pid: number): void {
   // wrong process. The chrome bridge does the same check via
   // isBridgeProcess. (See Greptile P1 "Reused PID kills unrelated
   // process".)
+  //
+  // **Fail-closed:** if the probe errors or times out, refuse to
+  // signal. A failed probe is an unknown state — safer to leave the
+  // process alone than to risk terminating an unrelated process.
   try {
     const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
       encoding: "utf-8",
@@ -252,13 +256,15 @@ function terminateTilionBridgeProcess(pid: number): void {
       // PID reused by an unrelated process — refuse to signal.
       return;
     }
+    // Recognized tilion bridge — safe to signal.
+    try {
+      process.kill(-pid, "SIGTERM");
+    } catch {
+      process.kill(pid, "SIGTERM");
+    }
   } catch {
-    // ps failed (pid not found, or timed out) — refuse to signal.
+    // ps failed (pid not found, hung, permission denied) — refuse to
+    // signal. Unknown state is never safe for an aggressive SIGTERM.
     return;
-  }
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    process.kill(pid, "SIGTERM");
   }
 }
