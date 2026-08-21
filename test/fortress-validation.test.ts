@@ -69,4 +69,22 @@ describe("fortress wrapper response validation", () => {
     // fortressStatus must reject responses missing `persona`.
     expect(source).toMatch(/response missing required `persona` field/);
   });
+
+  it("regression: success-status set is centralised in fortress.ts", async () => {
+    // The CLI's error path only checks `status === "error"`, so the
+    // wrapper must reject ANY non-success status before it reaches
+    // the CLI. The success set is centralised in FORTRESS_SUCCESS_STATUSES.
+    const source = await import("node:fs").then((fs) =>
+      fs.readFileSync(
+        new URL("../src/commands/fortress.ts", import.meta.url),
+        "utf8",
+      ),
+    );
+    expect(source).toMatch(/FORTRESS_SUCCESS_STATUSES/);
+    // All three fortress commands must call isFortressSuccessStatus.
+    // (Each isFortressSuccessStatus invocation guards against a
+    // failure-valued status passing through.)
+    const calls = source.match(/isFortressSuccessStatus\(/g) || [];
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+  });
 });

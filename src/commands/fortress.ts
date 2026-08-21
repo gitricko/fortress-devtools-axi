@@ -29,8 +29,40 @@ export async function fortressStatus(): Promise<{
  * graceful error — so `fortress status` always returns promptly instead of
  * blocking on a pending poll timer.
  */
-const FORTRESS_STATUS_DEADLINE_MS = 1000;
 const FORTRESS_STATUS_WATCHDOG_MS = 2500;
+const FORTRESS_STATUS_DEADLINE_MS = 1000;
+
+/**
+ * Explicit success statuses the Fortress tool is expected to return.
+ * The CLI's error path checks ONLY `status === "error"`, so anything
+ * NOT in this set is a success-by-default — meaning a tool returning
+ * {"status":"failed"} or {"status":"rejected"} would pass CLI
+ * validation and the CLI would exit 0 with a misleading "completed"
+ * message. Centralising the success set here means the wrappers
+ * catch failure statuses before they reach the CLI.
+ *
+ * If the tool ever returns a new success value, add it here.
+ */
+const FORTRESS_SUCCESS_STATUSES = new Set([
+  "ok",
+  "applied",
+  "completed",
+  "success",
+]);
+
+/** Is `status` a recognized SUCCESS status from the Fortress tool? */
+function isFortressSuccessStatus(status: unknown): boolean {
+  return typeof status === "string" && FORTRESS_SUCCESS_STATUSES.has(status);
+}
+
+/** Is `status` a recognized FAILURE status (anything not in success set)? */
+function isFortressFailureStatus(status: unknown): boolean {
+  return (
+    typeof status === "string" &&
+    !FORTRESS_SUCCESS_STATUSES.has(status) &&
+    status !== "indeterminate"
+  );
+}
 
 function fortressStatusWithDeadline(): Promise<{
   persona?: string;
@@ -83,6 +115,22 @@ function fortressStatusWithDeadline(): Promise<{
           error:
             "fortress_status response missing required `persona` field; " +
             "the bridge may have forwarded a different tool's result",
+          ...parsed,
+        };
+      }
+      // Reject failure statuses. The CLI only checks `status === "error"`,
+      // so a tool returning {"persona":"...","status":"failed"} would
+      // otherwise be reported as healthy. (See Greptile P1 "Failure
+      // statuses pass validation".)
+      if (
+        "status" in parsed &&
+        typeof parsed.status === "string" &&
+        !isFortressSuccessStatus(parsed.status) &&
+        parsed.status !== "indeterminate"
+      ) {
+        return {
+          healthy: false,
+          error: `fortress_status reported failure status: ${parsed.status}`,
           ...parsed,
         };
       }
@@ -157,9 +205,6 @@ export async function fortressPersonaSet(personaId: string): Promise<{
           "fortress persona set returned a non-JSON payload; result not verified",
       };
     }
-    // Don't synthesize `status: "applied"` when parsed JSON omits the
-    // status field — a valid response missing status is suspicious.
-    // Mark indeterminate and require operator verification.
     if (typeof parsed.status !== "string") {
       return {
         status: "indeterminate",
@@ -167,6 +212,19 @@ export async function fortressPersonaSet(personaId: string): Promise<{
         error:
           "fortress persona set response missing required `status` field; " +
           "operation may not have completed as expected",
+      };
+    }
+    // Validate that status is a recognized success. The CLI's error
+    // path checks ONLY `status === "error"`, so a tool returning
+    // {"status":"failed"} or {"status":"rejected"} would otherwise
+    // pass through as a successful persona change. Surface the
+    // failure here so the CLI exits non-zero. (See Greptile P1
+    // "Failure statuses pass validation".)
+    if (!isFortressSuccessStatus(parsed.status)) {
+      return {
+        status: "error",
+        persona_id: parsed.persona_id ?? personaId,
+        error: `fortress persona set reported failure status: ${parsed.status}`,
       };
     }
     return {
@@ -212,6 +270,12 @@ export async function fortressReset(): Promise<{
         error:
           "fortress reset response missing required `status` field; " +
           "operation may not have completed as expected",
+      };
+    }
+    if (!isFortressSuccessStatus(parsed.status)) {
+      return {
+        status: "error",
+        error: `fortress reset reported failure status: ${parsed.status}`,
       };
     }
     return { status: parsed.status };
