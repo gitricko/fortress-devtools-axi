@@ -159,20 +159,28 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
     mkdirSync(sessionDir, { recursive: true });
   }
   // Concurrent-bridge safety + atomicity: take a per-session lock file
-  // created with O_CREAT|O_EXCL (openSync "wx"). Exactly one bridge
-  // wins the slot; the loser sees EEXIST and backs off. This makes the
-  // check-then-write below atomic across processes — two same-session
-  // bridges can no longer both pass validation and clobber each other's
-  // metadata. (See Greptile P1 "PID ownership can still be corrupted by
-  // concurrent bridge startup".)
+  // created with O_CREAT|O_EXCL (openSync "wx"). Exactly one bridge wins
+  // the slot; the loser sees EEXIST and backs off. The lock is held for
+  // the bridge process's entire lifetime (released only on process exit),
+  // so the validate-then-write below is fully serialized — no other
+  // bridge can write the PID file while we hold the lock. (See Greptile
+  // P1 "PID ownership can still be corrupted by concurrent bridge startup".)
   //
-  // Stale-lock safety: if a bridge crashes between acquiring the lock
-  // and releasing it (the `finally` below), the lock file would remain
-  // forever and permanently block the session. To avoid that, the lock
-  // file records the holding process's pid; on acquire, if a lock
-  // already exists we check whether that pid is still alive. A dead
-  // holder means the lock is stale — we remove it and retry. (See
-  // Greptile P1 "Stale lock blocks bridge startup".)
+  // Holding the lock for the lifetime (rather than releasing it in a
+  // finally after writing) closes the "stale-lock cleanup unlinks a
+  // concurrently acquired lock" race: the lock is never released while
+  // we might still write, and recovery only ever removes a lock whose
+  // recorded holder pid is dead. (See Greptile P1 "Stale recovery
+  // deletes live lock".)
+  //
+  // Stale-lock safety: if a bridge exits without running its exit
+  // handler (SIGKILL, kernel panic), the lock file remains. The lock
+  // records the holder's pid; on acquire, if a lock already exists we
+  // check whether that pid is still alive. A dead/empty/non-numeric
+  // holder means the lock is stale — remove it and retry. An empty lock
+  // (crash between openSync and the pid write) is treated as stale,
+  // never as a live pid 0. (See Greptile P1 "Stale lock blocks bridge
+  // startup" + "Empty stale lock stays permanent".)
   let lockFd: number = -1;
   let lockAcquired = false;
   for (let attempt = 0; attempt < 2 && !lockAcquired; attempt++) {
@@ -192,11 +200,6 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
         try {
           const raw = readFileSync(lockPath, "utf8").trim();
           const holderPid = Number(raw);
-          // A lock with no/empty/non-numeric content means the holding
-          // bridge crashed between creating the lock and writing its pid
-          // (a crash mid-acquire race). Treat that as stale too — an
-          // empty lock must never be interpreted as a live pid 0 holder.
-          // (See Greptile P1 "Empty stale lock stays permanent".)
           const stale =
             raw === "" ||
             !Number.isFinite(holderPid) ||
@@ -227,79 +230,77 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
     );
   }
   try {
-    // Inside the lock: validate + write atomically.
-    // Stale-PID safety: a previous run may have left a PID file whose
-    // process is now dead. Refusing to overwrite it would lock the
-    // session permanently. Use isProcessAlive to distinguish dead
-    // (overwrite OK) from live (refuse). (See Greptile P1 "Stale PID
-    // blocks bridge ownership".)
-    //
-    // PID-reuse safety: liveness alone is not enough. On Linux, PIDs
-    // can be reused between process exit and a new unrelated process
-    // starting; the new process would inherit the pid and be live but
-    // NOT be a tilion bridge. Use probeTilionBridgeProcess so an
-    // unrelated process at the recorded pid no longer blocks the new
-    // bridge. (See Greptile P1 "stale PID reused by an unrelated live
-    // process can still prevent the Tilion bridge from starting".)
-    //
-    // Probe three-state: "yes" (confirmed live tilion bridge) → refuse;
-    // "no" (alive but unrelated, PID reuse) → overwrite; "unknown"
-    // (probe failed) → fall back to liveness alone. Conflating
-    // "unknown" with "no" would let a probe failure overwrite a live
-    // bridge; conflating with "yes" would lock startup forever. (See
-    // Greptile P1 "PID probe failure loses ownership" + "Probe failure
-    // locks PID ownership".)
-    if (existsSync(path)) {
-      try {
-        const existing = JSON.parse(
-          readFileSync(path, "utf8"),
-        ) as Partial<PidFileContents>;
-        if (existing.pid !== undefined && existing.pid !== process.pid) {
-          const probe = probeTilionBridgeProcess(existing.pid);
-          const ownedByLiveTilionBridge =
-            probe === "yes"
-              ? true
-              : probe === "no"
-                ? false
-                : isProcessAlive(existing.pid);
-          if (ownedByLiveTilionBridge) {
-            throw new Error(
-              `tilion PID file at ${path} is owned by live tilion bridge pid ${existing.pid}; ` +
-                `another bridge holds this session. Not overwriting.`,
-            );
-          }
-          // Either dead or PID reuse by an unrelated live process —
-          // fall through and overwrite.
-        }
-      } catch (err) {
-        // Re-throw our own ownership conflict; swallow JSON.parse errors
-        // on the existing file (corrupt) so the overwrite can proceed.
-        if (
-          err instanceof Error &&
-          err.message.startsWith("tilion PID file at")
-        ) {
-          throw err;
-        }
-        // Existing file is corrupt; overwrite it.
-      }
-    }
-    writeFileSync(path, JSON.stringify(payload));
-  } finally {
-    // Always release the lock (close + unlink) so the next bridge can
-    // acquire it. The PID file on disk is the source of truth.
-    if (lockFd >= 0) {
-      try {
-        closeSync(lockFd);
-      } catch {
-        // ignore
-      }
-    }
+    closeSync(lockFd);
+  } catch {
+    // ignore
+  }
+  lockFd = -1;
+  // Release the lifetime lock on exit. process.on("exit") handlers run
+  // synchronously during process teardown, before the event loop drains.
+  process.once("exit", () => {
     try {
       unlinkSync(lockPath);
     } catch {
-      // ignore
+      // already gone
+    }
+  });
+  // Inside the lock: validate + write atomically.
+  // Stale-PID safety: a previous run may have left a PID file whose
+  // process is now dead. Refusing to overwrite it would lock the
+  // session permanently. Use isProcessAlive to distinguish dead
+  // (overwrite OK) from live (refuse). (See Greptile P1 "Stale PID
+  // blocks bridge ownership".)
+  //
+  // PID-reuse safety: liveness alone is not enough. On Linux, PIDs
+  // can be reused between process exit and a new unrelated process
+  // starting; the new process would inherit the pid and be live but
+  // NOT be a tilion bridge. Use probeTilionBridgeProcess so an
+  // unrelated process at the recorded pid no longer blocks the new
+  // bridge. (See Greptile P1 "stale PID reused by an unrelated live
+  // process can still prevent the Tilion bridge from starting".)
+  //
+  // Probe three-state: "yes" (confirmed live tilion bridge) → refuse;
+  // "no" (alive but unrelated, PID reuse) → overwrite; "unknown"
+  // (probe failed) → fall back to liveness alone. Conflating
+  // "unknown" with "no" would let a probe failure overwrite a live
+  // bridge; conflating with "yes" would lock startup forever. (See
+  // Greptile P1 "PID probe failure loses ownership" + "Probe failure
+  // locks PID ownership".)
+  if (existsSync(path)) {
+    try {
+      const existing = JSON.parse(
+        readFileSync(path, "utf8"),
+      ) as Partial<PidFileContents>;
+      if (existing.pid !== undefined && existing.pid !== process.pid) {
+        const probe = probeTilionBridgeProcess(existing.pid);
+        const ownedByLiveTilionBridge =
+          probe === "yes"
+            ? true
+            : probe === "no"
+              ? false
+              : isProcessAlive(existing.pid);
+        if (ownedByLiveTilionBridge) {
+          throw new Error(
+            `tilion PID file at ${path} is owned by live tilion bridge pid ${existing.pid}; ` +
+              `another bridge holds this session. Not overwriting.`,
+          );
+        }
+        // Either dead or PID reuse by an unrelated live process —
+        // fall through and overwrite.
+      }
+    } catch (err) {
+      // Re-throw our own ownership conflict; swallow JSON.parse errors
+      // on the existing file (corrupt) so the overwrite can proceed.
+      if (
+        err instanceof Error &&
+        err.message.startsWith("tilion PID file at")
+      ) {
+        throw err;
+      }
+      // Existing file is corrupt; overwrite it.
     }
   }
+  writeFileSync(path, JSON.stringify(payload));
 }
 
 export function removeTilionPidFile(sessionName?: string): void {

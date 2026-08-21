@@ -39,11 +39,15 @@ describe("PID file ownership", () => {
     expect(contents.pid).toBe(process.pid);
     expect(contents.port).toBe(9225);
     rmSync(path);
+    rmSync(mod.resolveTilionLockFile("default"), { force: true });
   });
 
   it("THROWS when existing PID is alive AND belongs to a live tilion bridge", async () => {
     const mod = await import("../src/tilion-bridge-script.js");
     const path = mod.resolveTilionPidFile("default");
+    // Clean any lock left by a prior test (the lifetime lock is only
+    // released on process exit; vitest keeps one process alive).
+    rmSync(mod.resolveTilionLockFile("default"), { force: true });
     // Simulate a live tilion bridge by hand-crafting a PID file whose
     // recorded pid passes the liveness check (process.ppid is the
     // parent shell, which IS alive). The isTilionBridgeProcess guard
@@ -67,6 +71,7 @@ describe("PID file ownership", () => {
     const contents = JSON.parse(readFileSync(path, "utf8"));
     expect(contents.pid).toBe(process.pid);
     rmSync(path);
+    rmSync(mod.resolveTilionLockFile("default"), { force: true });
   });
 
   it("throw message names the conflict pid and the file path", async () => {
@@ -91,6 +96,10 @@ describe("PID file ownership", () => {
     );
     const childPid = child.pid!;
     let pidPath = "";
+    // Clean any lock left by a prior test (the lifetime lock is only
+    // released on process exit; vitest keeps one process alive).
+    const mod0 = await import("../src/tilion-bridge-script.js");
+    rmSync(mod0.resolveTilionLockFile("default"), { force: true });
     try {
       // Wait briefly for ps to see the process.
       await new Promise((r) => setTimeout(r, 200));
@@ -125,12 +134,16 @@ describe("PID file ownership", () => {
         process.kill(childPid, "SIGKILL");
       } catch {}
       if (pidPath) rmSync(pidPath, { force: true });
+      rmSync(mod0.resolveTilionLockFile("default"), { force: true });
     }
   });
 
   it("DOES overwrite a stale PID record (same pid, dead process)", async () => {
     const mod = await import("../src/tilion-bridge-script.js");
     const path = mod.resolveTilionPidFile("default");
+    // Clean any lock left by a prior test (the lifetime lock is only
+    // released on process exit; vitest keeps one process alive).
+    rmSync(mod.resolveTilionLockFile("default"), { force: true });
     // Our own PID but stale → safe to overwrite.
     writeFileSync(
       path,
@@ -141,6 +154,7 @@ describe("PID file ownership", () => {
     expect(contents.pid).toBe(process.pid);
     expect(contents.port).toBe(9225);
     rmSync(path);
+    rmSync(mod.resolveTilionLockFile("default"), { force: true });
   });
 
   it("removeTilionPidFile() only deletes if pid matches", async () => {
