@@ -51,11 +51,23 @@ function fortressStatusWithDeadline(): Promise<{
       // Success: the bridge is healthy and the process can exit on its own.
       settled = true;
       clearTimeout(watchdog);
-      return value as unknown as {
+      // The bridge returns the decoded tool-text from `extractToolText`,
+      // which is always a string. The fortress_status tool's text IS a
+      // JSON object stringified for transport, so parse it back. If it
+      // fails, return an empty object and let downstream consumers
+      // see "missing" fields instead of `undefined` from a bad cast.
+      let parsed: {
         persona?: string;
         fingerprint_state?: string;
         ua?: string;
-      };
+      } = {};
+      try {
+        parsed = JSON.parse(value) as typeof parsed;
+      } catch {
+        // Tool returned a non-JSON string (e.g. plain status text).
+        // Leave parsed as {} — callers handle missing fields gracefully.
+      }
+      return parsed;
     })
     .catch((err) => {
       // Error path: the underlying bridge poll may still hold the event loop
@@ -110,10 +122,22 @@ export async function fortressPersonaSet(personaId: string): Promise<{
     const result = await callTilionTool("fortress_persona_set", {
       persona_id: personaId,
     });
-    return result as unknown as {
-      status: string;
-      persona_id?: string;
-    };
+    // Bridge returns the decoded text (string); persona_set transports
+    // a JSON object inside that string. Parse it; if the tool returns
+    // plain status text instead, return a default with the parsed
+    // persona_id so downstream sees success.
+    try {
+      const parsed = JSON.parse(result) as {
+        status?: string;
+        persona_id?: string;
+      };
+      return {
+        status: parsed.status ?? "applied",
+        persona_id: parsed.persona_id ?? personaId,
+      };
+    } catch {
+      return { status: "applied", persona_id: personaId };
+    }
   } catch (error) {
     return {
       status: "error",
@@ -132,9 +156,15 @@ export async function fortressReset(): Promise<{
 }> {
   try {
     const result = await callTilionTool("fortress_reset", {});
-    return result as unknown as {
-      status: string;
-    };
+    // Bridge returns the decoded text (string); reset transports a JSON
+    // object inside that string. Parse it; fall back to a default success
+    // shape if the tool returns plain status text.
+    try {
+      const parsed = JSON.parse(result) as { status?: string };
+      return { status: parsed.status ?? "ok" };
+    } catch {
+      return { status: "ok" };
+    }
   } catch (error) {
     return {
       status: "error",
