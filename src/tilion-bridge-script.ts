@@ -18,28 +18,36 @@ import { resolveSessionStateDir } from "./sessions.js";
 import { isProcessAlive } from "./client.js";
 
 /**
- * Return true if the process at `pid` is plausibly a tilion bridge —
+ * Possible results of probing whether the process at `pid` is a tilion
+ * bridge. Tri-state so callers can distinguish "probe succeeded and
+ * confirmed identity" from "probe failed and we don't know" — those
+ * are different security postures.
+ */
+type TilionBridgeProbeResult = "yes" | "no" | "unknown";
+
+/**
+ * Return whether the process at `pid` is plausibly a tilion bridge —
  * i.e. its argv contains "chrome-devtools-axi-tilion-bridge". Used by
  * PID-file ownership checks to refuse overwriting/serving a slot held
  * by a process that just happens to share the pid (PID-reuse scenario
  * on Linux). Mirrors the chrome bridge's isBridgeProcess helper.
  *
- * Returns `false` on probe failure. The caller MUST treat the
- * `false` return as inconclusive and fall back to isProcessAlive()
- * — refusing to overwrite only if liveness confirms the pid is live.
- * This means a transient probe failure cannot crash bridge startup
- * permanently: only an actually-live pid can block overwrite. (See
- * Greptile P1 "Probe failure locks PID ownership".)
+ * Returns a tri-state ("yes" / "no" / "unknown") so the caller can
+ * treat probe failures distinctly from confirmed-not-a-bridge.
+ * Conflating the two (a boolean false) loses information that the
+ * caller needs to decide whether to fail open or fail closed.
+ * (See Greptile P1 "PID probe failure loses ownership" +
+ * "Probe failure locks PID ownership".)
  */
-function isTilionBridgeProcess(pid: number): boolean {
+function probeTilionBridgeProcess(pid: number): TilionBridgeProbeResult {
   try {
     const command = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
       encoding: "utf-8",
       timeout: 1000,
     });
-    return command.includes("chrome-devtools-axi-tilion-bridge");
+    return command.includes("chrome-devtools-axi-tilion-bridge") ? "yes" : "no";
   } catch {
-    return false;
+    return "unknown";
   }
 }
 
@@ -180,26 +188,24 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
         //   3. Alive but NOT a tilion bridge → overwrite (PID reuse)
         //
         // The probe (`ps -p <pid>`) can fail for transient reasons
-        // (ps not installed, permission denied, hung). A blanket
-        // fail-closed would crash bridge startup forever if the
-        // probe is consistently unavailable. Instead, fall back to
-        // isProcessAlive() alone when the probe errors: this means
-        // a transient probe failure can only over-write if the
-        // recorded pid is dead, which is safe.
+        // (ps not installed, permission denied, hung). We must NOT
+        // conflate probe failure with "is not a tilion bridge" —
+        // doing so would let a transient probe failure overwrite a
+        // live bridge's metadata (bad). Instead, on probe failure we
+        // fall back to liveness alone: only an actually-live pid can
+        // block overwrite. A dead pid is always safe to overwrite.
+        const probe = probeTilionBridgeProcess(existing.pid);
         let ownedByLiveTilionBridge: boolean;
-        if (isProcessAlive(existing.pid)) {
-          // pid is alive; try the identity probe.
-          // If it errors, conservatively assume "live bridge" to
-          // refuse overwrite (prefer blocking a fresh bridge over
-          // clobbering a real one).
-          try {
-            ownedByLiveTilionBridge = isTilionBridgeProcess(existing.pid);
-          } catch {
-            ownedByLiveTilionBridge = true;
-          }
-        } else {
-          // pid is dead — overwrite regardless of identity.
+        if (probe === "yes") {
+          // Confirmed live tilion bridge — refuse loudly.
+          ownedByLiveTilionBridge = true;
+        } else if (probe === "no") {
+          // Alive but unrelated process (PID reuse) — overwrite.
           ownedByLiveTilionBridge = false;
+        } else {
+          // "unknown" — probe failed. Fall back to liveness alone.
+          // Only a live pid can block; dead pid is always overwriteable.
+          ownedByLiveTilionBridge = isProcessAlive(existing.pid);
         }
         if (ownedByLiveTilionBridge) {
           throw new Error(
