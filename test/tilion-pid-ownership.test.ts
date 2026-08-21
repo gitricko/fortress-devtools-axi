@@ -199,15 +199,14 @@ describe("PID file ownership", () => {
     }
   });
 
-  it("recovers from a stale lock left by a crashed bridge", async () => {
-    // Stale-lock safety: if a previous bridge crashed while holding the
-    // lock, the lock file remains with a dead holder pid. A new bridge
-    // must detect the dead holder and remove the stale lock, not refuse.
+  it("recovers from an EMPTY stale lock (crash mid-acquire)", async () => {
+    // Stale-lock safety 2: if a bridge crashes between openSync("wx")
+    // and the writeFileSync(pid), the lock exists but is empty. The
+    // recovery must treat empty content as stale (never as pid 0).
     const mod = await import("../src/tilion-bridge-script.js");
     const lockPath = mod.resolveTilionLockFile("default");
     mkdirSync(dirname(lockPath), { recursive: true });
-    // Record a pid that is definitely dead (1 is always init/swapper).
-    writeFileSync(lockPath, "1");
+    writeFileSync(lockPath, ""); // empty lock = mid-acquire crash
     try {
       expect(() => mod.writeTilionPidFile(9225, "default")).not.toThrow();
       const contents = JSON.parse(

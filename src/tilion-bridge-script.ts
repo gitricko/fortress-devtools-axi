@@ -190,8 +190,18 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
       // EEXIST — lock held. Check for a stale (dead-holder) lock.
       if ((err as NodeJS.ErrnoException)?.code === "EEXIST") {
         try {
-          const holderPid = Number(readFileSync(lockPath, "utf8").trim());
-          if (Number.isFinite(holderPid) && !isProcessAlive(holderPid)) {
+          const raw = readFileSync(lockPath, "utf8").trim();
+          const holderPid = Number(raw);
+          // A lock with no/empty/non-numeric content means the holding
+          // bridge crashed between creating the lock and writing its pid
+          // (a crash mid-acquire race). Treat that as stale too — an
+          // empty lock must never be interpreted as a live pid 0 holder.
+          // (See Greptile P1 "Empty stale lock stays permanent".)
+          const stale =
+            raw === "" ||
+            !Number.isFinite(holderPid) ||
+            !isProcessAlive(holderPid);
+          if (stale) {
             // Stale lock from a crashed bridge — remove and retry once.
             unlinkSync(lockPath);
             continue;
