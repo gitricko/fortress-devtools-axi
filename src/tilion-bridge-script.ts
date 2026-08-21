@@ -4,7 +4,13 @@
  * This module deliberately imports nothing but node builtins.
  */
 
-import { existsSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  writeFileSync,
+  readFileSync,
+  unlinkSync,
+  mkdirSync,
+} from "node:fs";
 import { join } from "node:path";
 import { resolve } from "node:path";
 import { resolveSessionStateDir } from "./sessions.js";
@@ -88,7 +94,39 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
     port,
     startedAt: Date.now(),
   };
-  writeFileSync(resolveTilionPidFile(sessionName), JSON.stringify(payload));
+  const path = resolveTilionPidFile(sessionName);
+  // Fresh-session safety: the session state dir may not exist yet for
+  // brand-new named sessions. mkdirSync with recursive:true is a
+  // no-op if the dir already exists. Without this, writeFileSync throws
+  // ENOENT and the bridge process crashes silently on first start.
+  // (See Greptile P1 "Fresh sessions cannot persist PID".)
+  const sessionDir = resolveSessionStateDir(sessionName ?? "default");
+  if (!existsSync(sessionDir)) {
+    mkdirSync(sessionDir, { recursive: true });
+  }
+  // Concurrent-bridge safety: refuse to clobber an existing record of
+  // a DIFFERENT live bridge. If two bridges race for the same session
+  // port, the loser would silently overwrite the winner's PID record,
+  // making the running bridge undiscoverable. The owning bridge process
+  // also tracks this via `ownsPidFile`, but the script-level guard
+  // catches the case where one bridge is started before the other has
+  // fully exited. (See Greptile P1 "Concurrent bridges overwrite PID".)
+  if (existsSync(path)) {
+    try {
+      const existing = JSON.parse(
+        readFileSync(path, "utf8"),
+      ) as Partial<PidFileContents>;
+      if (existing.pid !== process.pid) {
+        // Reject — the other bridge owns this slot. The bridge process
+        // should already have caught EADDRINUSE on its listen, but this
+        // is a final safety net.
+        return;
+      }
+    } catch {
+      // Existing file is corrupt; overwrite it.
+    }
+  }
+  writeFileSync(path, JSON.stringify(payload));
 }
 
 export function removeTilionPidFile(sessionName?: string): void {
