@@ -4,7 +4,7 @@
  * This module deliberately imports nothing but node builtins.
  */
 
-import { existsSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { resolve } from "node:path";
 import { resolveSessionStateDir } from "./sessions.js";
@@ -93,9 +93,22 @@ export function writeTilionPidFile(port: number, sessionName?: string): void {
 
 export function removeTilionPidFile(sessionName?: string): void {
   try {
-    unlinkSync(resolveTilionPidFile(sessionName));
+    // Ownership check: only delete the PID file if it records OUR
+    // process.pid. Otherwise, if two bridges were raced up under the
+    // same session (e.g. one on the deterministic port and one on an
+    // explicit port), the loser still removes the winner's record.
+    // The bridge process guards against this with an `ownsPidFile`
+    // flag; the script-level check is a belt-and-braces guard for
+    // callers that haven't read `writeTilionPidFile`'s output. (See
+    // Greptile P1 #8.)
+    const path = resolveTilionPidFile(sessionName);
+    const contents = readFileSync(path, "utf8") as string;
+    const parsed = JSON.parse(contents) as Partial<PidFileContents>;
+    if (parsed.pid === process.pid) {
+      unlinkSync(path);
+    }
   } catch {
-    // ignore — file may not exist on a quick restart
+    // File doesn't exist or wasn't ours — safe to ignore.
   }
 }
 

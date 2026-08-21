@@ -95,10 +95,22 @@ export async function runTilionBridge(port: number = resolveSessionPort()): Prom
             name: payload.name,
             arguments: payload.args,
           });
-          // Extract text from result
+          // Extract text from result. MCP tool results may have
+          // `isError: true` indicating a TOOL-level failure (the call
+          // itself succeeded but the tool reported an error). Surface
+          // that as a 500 so the client wrapper can distinguish
+          // bridge-level failures from tool-level failures. Without
+          // this, persona-set returning {"isError": true, "content":
+          // "persona not found"} would be reported as a SUCCESSFUL
+          // persona change. (See Greptile P1 #7.)
           const text = extractToolText(result.content);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ result: text }));
+          if (result.isError === true) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: text || "tool reported an error" }));
+          } else {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ result: text }));
+          }
         } catch (error) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: getErrorMessage(error) }));
